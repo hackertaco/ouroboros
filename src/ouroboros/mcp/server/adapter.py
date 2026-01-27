@@ -5,6 +5,7 @@ protocol using the MCP SDK (FastMCP). It handles tool registration, resource
 handling, and server lifecycle.
 """
 
+import asyncio
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,7 +18,12 @@ from ouroboros.mcp.errors import (
     MCPToolError,
 )
 from ouroboros.mcp.server.protocol import PromptHandler, ResourceHandler, ToolHandler
-from ouroboros.mcp.server.security import AuthConfig, RateLimitConfig, SecurityLayer
+from ouroboros.mcp.server.security import (
+    AuthConfig,
+    ExecutionConfig,
+    RateLimitConfig,
+    SecurityLayer,
+)
 from ouroboros.mcp.types import (
     MCPCapabilities,
     MCPPromptDefinition,
@@ -58,6 +64,7 @@ class MCPServerAdapter:
         version: str = "1.0.0",
         auth_config: AuthConfig | None = None,
         rate_limit_config: RateLimitConfig | None = None,
+        execution_config: ExecutionConfig | None = None,
     ) -> None:
         """Initialize the server adapter.
 
@@ -66,6 +73,7 @@ class MCPServerAdapter:
             version: Server version.
             auth_config: Optional authentication configuration.
             rate_limit_config: Optional rate limiting configuration.
+            execution_config: Optional execution timeout configuration.
         """
         self._name = name
         self._version = version
@@ -78,6 +86,7 @@ class MCPServerAdapter:
         self._security = SecurityLayer(
             auth_config=auth_config or AuthConfig(),
             rate_limit_config=rate_limit_config or RateLimitConfig(),
+            execution_config=execution_config or ExecutionConfig(),
         )
 
     @property
@@ -198,8 +207,32 @@ class MCPServerAdapter:
             return Result.err(security_result.error)
 
         try:
-            result = await handler.handle(arguments)
-            return result
+            # Execute with timeout protection if configured
+            timeout = self._security.timeout_seconds
+            if timeout is not None:
+                try:
+                    result = await asyncio.wait_for(
+                        handler.handle(arguments),
+                        timeout=timeout,
+                    )
+                    return result
+                except asyncio.TimeoutError:
+                    log.error(
+                        "mcp.server.tool_timeout",
+                        tool=name,
+                        timeout=timeout,
+                    )
+                    return Result.err(
+                        MCPServerError(
+                            f"Tool execution timed out after {timeout}s",
+                            server_name=self._name,
+                            is_retriable=False,
+                            details={"timeout": timeout, "tool": name},
+                        )
+                    )
+            else:
+                result = await handler.handle(arguments)
+                return result
         except Exception as e:
             log.error("mcp.server.tool_error", tool=name, error=str(e))
             return Result.err(
@@ -290,6 +323,18 @@ class MCPServerAdapter:
 
         Args:
             transport: Transport type - "stdio" or "sse".
+                - "stdio": Standard input/output transport (fully supported)
+                - "sse": Server-Sent Events transport (requires FastMCP >= 0.3.0)
+
+        Note:
+            SSE transport support depends on the FastMCP library version.
+            The run_sse_async() method is available in FastMCP 0.3.0+.
+            For earlier versions, only stdio transport is supported.
+            SSE transport enables HTTP-based communication for web clients.
+
+        Raises:
+            ImportError: If mcp package is not installed.
+            AttributeError: If SSE transport is requested but not supported by FastMCP version.
         """
         try:
             from mcp.server.fastmcp import FastMCP
@@ -354,8 +399,16 @@ class MCPServerAdapter:
 
         # Run the server with the appropriate transport
         if transport == "sse":
+            # SSE transport for HTTP-based communication
+            if not hasattr(self._mcp_server, "run_sse_async"):
+                msg = (
+                    "SSE transport not supported by current FastMCP version. "
+                    "Upgrade to FastMCP >= 0.3.0 or use 'stdio' transport."
+                )
+                raise AttributeError(msg)
             await self._mcp_server.run_sse_async()
         else:
+            # STDIO transport (default)
             await self._mcp_server.run_stdio_async()
 
     async def shutdown(self) -> None:
@@ -370,6 +423,7 @@ def create_ouroboros_server(
     version: str = "1.0.0",
     auth_config: AuthConfig | None = None,
     rate_limit_config: RateLimitConfig | None = None,
+    execution_config: ExecutionConfig | None = None,
 ) -> MCPServerAdapter:
     """Create an Ouroboros MCP server with default handlers.
 
@@ -381,6 +435,7 @@ def create_ouroboros_server(
         version: Server version.
         auth_config: Optional authentication configuration.
         rate_limit_config: Optional rate limiting configuration.
+        execution_config: Optional execution timeout configuration.
 
     Returns:
         Configured MCPServerAdapter ready to serve.
@@ -390,6 +445,7 @@ def create_ouroboros_server(
         version=version,
         auth_config=auth_config,
         rate_limit_config=rate_limit_config,
+        execution_config=execution_config,
     )
 
     # Tools and resources will be registered separately

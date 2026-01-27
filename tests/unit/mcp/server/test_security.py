@@ -1,7 +1,9 @@
 """Tests for MCP server security layer."""
 
+import asyncio
 import hashlib
 import hmac
+import threading
 import time
 
 import pytest
@@ -136,6 +138,29 @@ class TestAuthenticator:
         assert result.is_err
         assert "expired" in str(result.error).lower()
 
+    def test_bearer_token_future_rejected(self) -> None:
+        """Future bearer tokens are rejected (security fix for abs() removal)."""
+        secret = "test-secret"
+        client_id = "test-client"
+        timestamp = str(int(time.time()) + 3600)  # 1 hour in the future
+        signature = hmac.new(
+            secret.encode(),
+            f"{client_id}:{timestamp}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        token = f"{client_id}:{timestamp}:{signature}"
+
+        config = AuthConfig(
+            method=AuthMethod.BEARER_TOKEN,
+            token_secret=secret,
+            required=True,
+        )
+        authenticator = Authenticator(config)
+        result = authenticator.authenticate({"token": token})
+
+        assert result.is_err
+        assert "future" in str(result.error).lower()
+
 
 class TestAuthorizer:
     """Test Authorizer class."""
@@ -222,6 +247,110 @@ class TestInputValidator:
         assert result.is_err
         assert "Potentially dangerous" in str(result.error)
 
+    def test_validate_eval_injection(self) -> None:
+        """eval() injection patterns are detected."""
+        validator = InputValidator()
+
+        # Test various eval patterns
+        test_cases = [
+            {"input": "eval('malicious code')"},
+            {"input": "eval ('code')"},  # With space
+            {"input": "x = eval(user_input)"},
+        ]
+
+        for args in test_cases:
+            result = validator.validate("tool", args)
+            assert result.is_err, f"Should reject eval pattern: {args}"
+            assert "code injection" in str(result.error).lower()
+
+    def test_validate_exec_injection(self) -> None:
+        """exec() injection patterns are detected."""
+        validator = InputValidator()
+
+        # Test various exec patterns
+        test_cases = [
+            {"input": "exec('rm -rf /')"},
+            {"input": "exec ('code')"},  # With space
+            {"input": "exec(compile('code', '<string>', 'exec'))"},
+        ]
+
+        for args in test_cases:
+            result = validator.validate("tool", args)
+            assert result.is_err, f"Should reject exec pattern: {args}"
+            assert "code injection" in str(result.error).lower()
+
+    def test_validate_path_traversal(self) -> None:
+        """Path traversal attempts are detected."""
+        validator = InputValidator()
+
+        # Test various path traversal patterns
+        test_cases = [
+            {"path": "../../../etc/passwd"},
+            {"path": "..\\..\\windows\\system32"},
+            {"path": "/etc/passwd"},  # Absolute path
+            {"path": "C:\\Windows\\System32"},  # Windows absolute
+            {"path": "//network/share/file"},  # UNC path
+            {"path": "\\\\network\\share"},  # UNC path Windows
+        ]
+
+        for args in test_cases:
+            result = validator.validate("tool", args)
+            assert result.is_err, f"Should reject path traversal: {args}"
+            error_msg = str(result.error).lower()
+            assert any(
+                x in error_msg
+                for x in ["path traversal", "absolute path", "unc path"]
+            )
+
+    def test_validate_shell_metacharacters(self) -> None:
+        """Shell metacharacters are detected."""
+        validator = InputValidator()
+
+        # Test various shell injection patterns
+        test_cases = [
+            {"cmd": "ls; rm -rf /"},  # Command separator
+            {"cmd": "cat file | grep secret"},  # Pipe
+            {"cmd": "echo $(whoami)"},  # Command substitution
+            {"cmd": "echo `whoami`"},  # Backtick substitution
+            {"cmd": "cat ${SECRET}"},  # Variable expansion
+            {"cmd": "ls && rm file"},  # Conditional execution
+            {"cmd": "ls || echo fail"},  # Or execution
+            {"cmd": "echo test > output.txt"},  # Redirection
+            {"cmd": "cat < input.txt"},  # Input redirection
+            {"cmd": "sleep 10 &"},  # Background execution
+        ]
+
+        for args in test_cases:
+            result = validator.validate("tool", args)
+            assert result.is_err, f"Should reject shell metacharacter: {args}"
+            assert "shell metacharacter" in str(result.error).lower()
+
+    def test_validate_safe_paths(self) -> None:
+        """Safe relative paths are allowed."""
+        validator = InputValidator()
+
+        # Test safe path patterns
+        test_cases = [
+            {"path": "data/file.txt"},
+            {"path": "subdir/file.json"},
+            {"path": "output.log"},
+        ]
+
+        for args in test_cases:
+            result = validator.validate("tool", args)
+            assert result.is_ok, f"Should allow safe path: {args}"
+
+    def test_validate_compile_injection(self) -> None:
+        """compile() function is detected as dangerous."""
+        validator = InputValidator()
+        result = validator.validate(
+            "tool",
+            {"code": "compile('print(1)', '<string>', 'exec')"},
+        )
+
+        assert result.is_err
+        assert "code injection" in str(result.error).lower()
+
 
 class TestRateLimiter:
     """Test RateLimiter class."""
@@ -255,6 +384,57 @@ class TestRateLimiter:
 
         # Client2 should still be allowed
         assert await limiter.check("client2") is True
+
+    async def test_rate_limiter_concurrent_checks(self) -> None:
+        """Rate limiter handles concurrent checks safely."""
+        limiter = RateLimiter(requests_per_minute=60, burst_size=10)
+
+        # Run multiple concurrent checks
+        results = await asyncio.gather(
+            *[limiter.check("concurrent-client") for _ in range(15)]
+        )
+
+        # Should allow burst_size requests, then block remaining
+        allowed = sum(1 for r in results if r)
+        blocked = sum(1 for r in results if not r)
+
+        assert allowed == 10, "Should allow exactly burst_size requests"
+        assert blocked == 5, "Should block excess requests"
+
+    def test_rate_limiter_reset_thread_safety(self) -> None:
+        """Rate limiter reset() is thread-safe."""
+        limiter = RateLimiter(requests_per_minute=60, burst_size=5)
+
+        # Setup some buckets
+        async def setup() -> None:
+            await limiter.check("client1")
+            await limiter.check("client2")
+            await limiter.check("client3")
+
+        asyncio.run(setup())
+
+        # Concurrent resets from multiple threads
+        errors: list[Exception] = []
+
+        def reset_client(client_id: str) -> None:
+            try:
+                for _ in range(100):
+                    limiter.reset(client_id)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=reset_client, args=(f"client{i}",))
+            for i in range(1, 4)
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should not have any race condition errors
+        assert len(errors) == 0, f"Thread safety violations: {errors}"
 
 
 class TestSecurityLayer:

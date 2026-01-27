@@ -5,6 +5,7 @@ dynamic registration, discovery, and invocation of tools.
 """
 
 from collections.abc import Sequence
+import threading
 from typing import Any
 
 import structlog
@@ -237,18 +238,29 @@ class ToolRegistry:
 
 # Global registry instance for convenience
 _global_registry: ToolRegistry | None = None
+_registry_lock = threading.Lock()
 
 
 def get_global_registry() -> ToolRegistry:
     """Get the global tool registry.
 
+    Thread-safe initialization using double-checked locking pattern
+    to prevent TOCTOU (Time-Of-Check-Time-Of-Use) vulnerabilities.
+
     Returns:
         The global ToolRegistry instance.
     """
     global _global_registry
-    if _global_registry is None:
-        _global_registry = ToolRegistry()
-    return _global_registry
+
+    # First check (without lock) for performance
+    if _global_registry is not None:
+        return _global_registry
+
+    # Second check (with lock) to prevent race conditions
+    with _registry_lock:
+        if _global_registry is None:
+            _global_registry = ToolRegistry()
+        return _global_registry
 
 
 def register_tool(

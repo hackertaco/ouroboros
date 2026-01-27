@@ -70,7 +70,12 @@ async def _run_orchestrator(
     print_info(f"Acceptance criteria: {len(seed.acceptance_criteria)}")
 
     # Initialize components
-    event_store = EventStore()
+    from pathlib import Path
+    db_path = Path.home() / ".ouroboros" / "events.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    database_url = f"sqlite+aiosqlite:///{db_path}"
+
+    event_store = EventStore(database_url)
     await event_store.initialize()
 
     adapter = ClaudeAgentAdapter()

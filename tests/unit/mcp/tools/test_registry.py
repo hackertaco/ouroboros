@@ -1,5 +1,6 @@
 """Tests for tool registry."""
 
+import threading
 from typing import Any
 
 import pytest
@@ -236,3 +237,96 @@ class TestGlobalRegistry:
         registry2 = get_global_registry()
 
         assert registry1 is registry2
+
+    def test_global_registry_thread_safety(self) -> None:
+        """Global registry initialization is thread-safe (TOCTOU protection)."""
+        # Reset global registry to test initialization
+        import ouroboros.mcp.tools.registry as registry_module
+
+        original = registry_module._global_registry
+        registry_module._global_registry = None
+
+        try:
+            registries: list[ToolRegistry] = []
+            errors: list[Exception] = []
+
+            def get_registry() -> None:
+                try:
+                    registry = get_global_registry()
+                    registries.append(registry)
+                except Exception as e:
+                    errors.append(e)
+
+            # Create multiple threads that try to get the global registry
+            threads = [threading.Thread(target=get_registry) for _ in range(10)]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Should have no errors
+            assert len(errors) == 0, f"Thread safety violations: {errors}"
+
+            # All threads should get the same instance
+            assert len(registries) == 10
+            assert all(r is registries[0] for r in registries), (
+                "All threads should get the same registry instance"
+            )
+        finally:
+            # Restore original registry
+            registry_module._global_registry = original
+
+
+class TestRegistryConcurrency:
+    """Test concurrent access to tool registry."""
+
+    async def test_concurrent_tool_calls(self) -> None:
+        """Registry handles concurrent tool calls safely."""
+        import asyncio
+
+        registry = ToolRegistry()
+        handler = MockToolHandler("concurrent_tool")
+        registry.register(handler)
+
+        # Make multiple concurrent calls
+        results = await asyncio.gather(
+            *[
+                registry.call("concurrent_tool", {"input": f"call-{i}"})
+                for i in range(20)
+            ]
+        )
+
+        # All calls should succeed
+        assert all(r.is_ok for r in results)
+        assert handler._call_count == 20
+
+    def test_concurrent_registration(self) -> None:
+        """Registry handles concurrent registration safely."""
+        registry = ToolRegistry()
+        errors: list[Exception] = []
+        success_count = [0]
+
+        def register_tool(tool_id: int) -> None:
+            try:
+                handler = MockToolHandler(f"tool-{tool_id}")
+                registry.register(handler)
+                success_count[0] += 1
+            except ValueError:
+                # Expected for duplicate names
+                pass
+            except Exception as e:
+                errors.append(e)
+
+        # Register tools from multiple threads
+        threads = [threading.Thread(target=register_tool, args=(i,)) for i in range(10)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should have no unexpected errors
+        assert len(errors) == 0, f"Unexpected errors: {errors}"
+        assert success_count[0] == 10, "All unique registrations should succeed"
+        assert registry.tool_count == 10

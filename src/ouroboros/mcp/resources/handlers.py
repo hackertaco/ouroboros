@@ -8,6 +8,8 @@ This module defines resource handlers for exposing Ouroboros data:
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import re
+from urllib.parse import urlparse
 
 import structlog
 
@@ -16,6 +18,56 @@ from ouroboros.mcp.errors import MCPResourceNotFoundError, MCPServerError
 from ouroboros.mcp.types import MCPResourceContent, MCPResourceDefinition
 
 log = structlog.get_logger(__name__)
+
+
+def _validate_uri_format(uri: str, expected_scheme: str = "ouroboros") -> tuple[bool, str | None]:
+    """Validate URI format for security and correctness.
+
+    Args:
+        uri: The URI to validate.
+        expected_scheme: Expected URI scheme (default: "ouroboros").
+
+    Returns:
+        Tuple of (is_valid, error_message).
+    """
+    if not uri:
+        return False, "URI cannot be empty"
+
+    # Check for dangerous characters
+    dangerous_chars = ["<", ">", "\"", "'", "`", "\0", "\n", "\r"]
+    for char in dangerous_chars:
+        if char in uri:
+            return False, f"URI contains dangerous character: {repr(char)}"
+
+    # Parse URI
+    try:
+        parsed = urlparse(uri)
+    except Exception as e:
+        return False, f"Invalid URI format: {e}"
+
+    # Check scheme
+    if not parsed.scheme:
+        return False, "URI must include a scheme (e.g., ouroboros://)"
+
+    if parsed.scheme != expected_scheme:
+        return False, f"Invalid URI scheme: expected '{expected_scheme}', got '{parsed.scheme}'"
+
+    # Check for valid path structure (no path traversal, proper format)
+    path = parsed.path
+    if not path or path == "/":
+        # Root path is allowed for listing resources
+        return True, None
+
+    # Check for path traversal attempts
+    if ".." in path or path.startswith("//"):
+        return False, "URI contains path traversal pattern"
+
+    # Validate path contains only safe characters
+    # Allow: alphanumeric, hyphen, underscore, forward slash
+    if not re.match(r'^[a-zA-Z0-9/_-]+$', path):
+        return False, "URI path contains invalid characters"
+
+    return True, None
 
 
 @dataclass
@@ -53,6 +105,17 @@ class SeedsResourceHandler:
             Result containing resource content or error.
         """
         log.info("mcp.resource.seeds", uri=uri)
+
+        # Validate URI format
+        is_valid, error_msg = _validate_uri_format(uri)
+        if not is_valid:
+            log.warning("mcp.resource.invalid_uri", uri=uri, error=error_msg)
+            return Result.err(
+                MCPServerError(
+                    f"Invalid URI format: {error_msg}",
+                    details={"uri": uri},
+                )
+            )
 
         try:
             if uri == "ouroboros://seeds":
@@ -145,6 +208,17 @@ class SessionsResourceHandler:
             Result containing resource content or error.
         """
         log.info("mcp.resource.sessions", uri=uri)
+
+        # Validate URI format
+        is_valid, error_msg = _validate_uri_format(uri)
+        if not is_valid:
+            log.warning("mcp.resource.invalid_uri", uri=uri, error=error_msg)
+            return Result.err(
+                MCPServerError(
+                    f"Invalid URI format: {error_msg}",
+                    details={"uri": uri},
+                )
+            )
 
         try:
             if uri == "ouroboros://sessions":
@@ -248,6 +322,17 @@ class EventsResourceHandler:
             Result containing resource content or error.
         """
         log.info("mcp.resource.events", uri=uri)
+
+        # Validate URI format
+        is_valid, error_msg = _validate_uri_format(uri)
+        if not is_valid:
+            log.warning("mcp.resource.invalid_uri", uri=uri, error=error_msg)
+            return Result.err(
+                MCPServerError(
+                    f"Invalid URI format: {error_msg}",
+                    details={"uri": uri},
+                )
+            )
 
         try:
             if uri == "ouroboros://events":

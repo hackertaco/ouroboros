@@ -10,9 +10,11 @@ This module provides security features for the MCP server including:
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 import hashlib
 import hmac
+import threading
 import time
 from typing import Any, TypeVar
 
@@ -76,6 +78,19 @@ class RateLimitConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionConfig:
+    """Tool execution configuration.
+
+    Attributes:
+        timeout_seconds: Maximum execution time for tool calls (default 30s).
+        enabled: Whether timeout enforcement is enabled.
+    """
+
+    timeout_seconds: float = 30.0
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class ToolPermission:
     """Permission configuration for a tool.
 
@@ -115,7 +130,7 @@ class RateLimiter:
     """Token bucket rate limiter.
 
     Implements a token bucket algorithm for rate limiting requests
-    per client.
+    per client. Thread-safe for concurrent access.
     """
 
     def __init__(
@@ -132,7 +147,8 @@ class RateLimiter:
         self._rate = requests_per_minute / 60.0  # Requests per second
         self._burst_size = burst_size
         self._buckets: dict[str, tuple[float, float]] = {}  # client_id -> (tokens, last_update)
-        self._lock = asyncio.Lock()
+        self._async_lock = asyncio.Lock()
+        self._thread_lock = threading.Lock()
 
     async def check(self, client_id: str) -> bool:
         """Check if a request is allowed.
@@ -143,7 +159,7 @@ class RateLimiter:
         Returns:
             True if the request is allowed, False if rate limited.
         """
-        async with self._lock:
+        async with self._async_lock:
             now = time.monotonic()
             tokens, last_update = self._buckets.get(client_id, (self._burst_size, now))
 
@@ -161,11 +177,14 @@ class RateLimiter:
     def reset(self, client_id: str) -> None:
         """Reset rate limit for a client.
 
+        Thread-safe method that uses a lock to prevent race conditions.
+
         Args:
             client_id: Identifier for the client.
         """
-        if client_id in self._buckets:
-            del self._buckets[client_id]
+        with self._thread_lock:
+            if client_id in self._buckets:
+                del self._buckets[client_id]
 
 
 class Authenticator:
@@ -329,9 +348,23 @@ class Authenticator:
             )
 
         # Check timestamp (tokens valid for 1 hour)
+        # Use proper datetime comparison with timezone awareness
+        # SECURITY: Removed abs() to prevent future tokens from being accepted
         try:
             timestamp = int(timestamp_str)
-            if abs(time.time() - timestamp) > 3600:
+            token_time = datetime.fromtimestamp(timestamp, tz=UTC)
+            current_time = datetime.now(UTC)
+            time_diff = current_time - token_time
+
+            # Token must be from the past and not expired (1 hour validity)
+            if time_diff < timedelta(0):
+                return Result.err(
+                    MCPAuthError(
+                        "Token is from the future",
+                        auth_method=AuthMethod.BEARER_TOKEN.value,
+                    )
+                )
+            if time_diff > timedelta(hours=1):
                 return Result.err(
                     MCPAuthError(
                         "Token expired",
@@ -339,6 +372,14 @@ class Authenticator:
                     )
                 )
         except ValueError:
+            return Result.err(
+                MCPAuthError(
+                    "Invalid token timestamp",
+                    auth_method=AuthMethod.BEARER_TOKEN.value,
+                )
+            )
+        except (OSError, OverflowError):
+            # Handle timestamp out of range
             return Result.err(
                 MCPAuthError(
                     "Invalid token timestamp",
@@ -442,6 +483,91 @@ class InputValidator:
         """
         self._validators[tool_name] = validator
 
+    @staticmethod
+    def _check_code_injection(value: str) -> tuple[bool, str | None]:
+        """Check for code injection patterns.
+
+        Args:
+            value: String value to check.
+
+        Returns:
+            Tuple of (is_dangerous, pattern_found).
+        """
+        # Patterns for code execution
+        code_execution_patterns = [
+            "__import__",
+            "subprocess",
+            "os.popen",
+            "eval(",
+            "eval (",
+            "exec(",
+            "exec (",
+            "compile(",
+        ]
+        for pattern in code_execution_patterns:
+            if pattern in value:
+                return True, pattern
+        return False, None
+
+    @staticmethod
+    def _check_path_traversal(value: str) -> tuple[bool, str | None]:
+        """Check for path traversal attempts.
+
+        Args:
+            value: String value to check.
+
+        Returns:
+            Tuple of (is_dangerous, pattern_found).
+        """
+        # Check for path traversal patterns
+        if "../" in value or "..\\" in value:
+            return True, "path traversal (../)"
+
+        # Check for absolute paths on Unix/Linux
+        if value.startswith("/"):
+            return True, "absolute path (/)"
+
+        # Check for absolute paths on Windows
+        if len(value) >= 2 and value[1] == ":" and value[0].isalpha():
+            return True, "absolute path (C:)"
+
+        # Check for UNC paths
+        if value.startswith("\\\\") or value.startswith("//"):
+            return True, "UNC path"
+
+        return False, None
+
+    @staticmethod
+    def _check_shell_metacharacters(value: str) -> tuple[bool, str | None]:
+        """Check for shell metacharacters in untrusted input.
+
+        Args:
+            value: String value to check.
+
+        Returns:
+            Tuple of (is_dangerous, pattern_found).
+        """
+        # Shell metacharacters that can be used for command injection
+        shell_metacharacters = [
+            ";",   # Command separator
+            "&",   # Background execution or command chaining
+            "|",   # Pipe
+            "$(",  # Command substitution
+            "`",   # Command substitution (backticks)
+            "$()",
+            "${",  # Variable expansion
+            ">",   # Redirection
+            "<",   # Redirection
+            "&&",  # Conditional execution
+            "||",  # Conditional execution
+            "\n",  # Newline (can separate commands)
+            "\r",  # Carriage return
+        ]
+        for metachar in shell_metacharacters:
+            if metachar in value:
+                return True, f"shell metacharacter ({metachar})"
+        return False, None
+
     def validate(
         self,
         tool_name: str,
@@ -459,17 +585,37 @@ class InputValidator:
             Result.ok(None) if valid, Result.err otherwise.
         """
         # Check for dangerous patterns in string arguments
-        dangerous_patterns = ["__import__", "subprocess", "os.popen"]
         for key, value in arguments.items():
             if isinstance(value, str):
-                for pattern in dangerous_patterns:
-                    if pattern in value:
-                        return Result.err(
-                            MCPServerError(
-                                f"Potentially dangerous input in {key}",
-                                details={"pattern": pattern},
-                            )
+                # Check for code injection
+                is_dangerous, pattern = self._check_code_injection(value)
+                if is_dangerous:
+                    return Result.err(
+                        MCPServerError(
+                            f"Potentially dangerous input in {key}: code injection pattern detected",
+                            details={"pattern": pattern, "field": key},
                         )
+                    )
+
+                # Check for path traversal
+                is_dangerous, pattern = self._check_path_traversal(value)
+                if is_dangerous:
+                    return Result.err(
+                        MCPServerError(
+                            f"Potentially dangerous input in {key}: path traversal detected",
+                            details={"pattern": pattern, "field": key},
+                        )
+                    )
+
+                # Check for shell metacharacters
+                is_dangerous, pattern = self._check_shell_metacharacters(value)
+                if is_dangerous:
+                    return Result.err(
+                        MCPServerError(
+                            f"Potentially dangerous input in {key}: shell metacharacter detected",
+                            details={"pattern": pattern, "field": key},
+                        )
+                    )
 
         # Run custom validator if registered
         if tool_name in self._validators:
@@ -488,12 +634,13 @@ class InputValidator:
 class SecurityLayer:
     """Combined security layer for MCP server.
 
-    Provides authentication, authorization, rate limiting, and input validation
-    in a single interface.
+    Provides authentication, authorization, rate limiting, input validation,
+    and execution timeout protection in a single interface.
     """
 
     auth_config: AuthConfig = field(default_factory=AuthConfig)
     rate_limit_config: RateLimitConfig = field(default_factory=RateLimitConfig)
+    execution_config: ExecutionConfig = field(default_factory=ExecutionConfig)
 
     def __post_init__(self) -> None:
         """Initialize security components."""
@@ -507,6 +654,17 @@ class SecurityLayer:
                 self.rate_limit_config.requests_per_minute,
                 self.rate_limit_config.burst_size,
             )
+
+    @property
+    def timeout_seconds(self) -> float | None:
+        """Get the configured timeout in seconds.
+
+        Returns:
+            Timeout in seconds if enabled, None otherwise.
+        """
+        if self.execution_config.enabled:
+            return self.execution_config.timeout_seconds
+        return None
 
     def register_tool_permission(self, permission: ToolPermission) -> None:
         """Register permission requirements for a tool."""
