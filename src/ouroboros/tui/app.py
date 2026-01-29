@@ -511,6 +511,7 @@ class OuroborosTUI(App[None]):
             try:
                 await self._subscription_task
             except asyncio.CancelledError:
+                # Task cancellation is expected during application shutdown; ignore.
                 pass
 
 
