@@ -4,7 +4,7 @@ This guide will help you install Ouroboros and run your first self-improving AI 
 
 ## Prerequisites
 
-- Python 3.12 or higher
+- Python 3.14 or higher
 - [uv](https://github.com/astral-sh/uv) package manager (recommended)
 - An LLM API key (OpenAI, Anthropic, or other supported providers)
 
