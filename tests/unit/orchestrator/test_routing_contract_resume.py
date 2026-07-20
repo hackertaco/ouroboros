@@ -1285,6 +1285,31 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
         original_contract["foundation_a_authority"]["correlation_id"]
         != resumed_contract["foundation_a_authority"]["correlation_id"]
     )
+    persisted_identity = original_contract["model_routing"]["runtime_execution"]["identity"]
+    assert persisted_identity == {
+        "cli_executable_path": str(Path("/bin/echo").absolute()),
+        "cli_executable_version": original_runtime._cli_executable_version_identity(),
+        "codex_config_fingerprint": original_runtime._codex_config_fingerprint,
+        "codex_profile": "zep-proxy-a",
+        "effective_model_observed": True,
+        "fallback_model": "resolved-fallback-model",
+        "fallback_profile": "zep-proxy-a",
+        "kind": "codex_cli_v1",
+        "llm_backend": "codex",
+        "profile_resolution_fingerprint": (original_runtime._profile_resolution_fingerprint),
+        "resume_handle_selector": {
+            "backend": "codex_cli",
+            "kind": "agent_runtime",
+            "selectors": {},
+        },
+        "runtime_profile": "zep-runtime",
+    }
+    resumed = OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())
+    with pytest.raises(OrchestratorError, match="different runtime execution profile"):
+        resumed._restore_execution_contract(
+            {EXECUTION_CONTRACT_PROGRESS_KEY: original_contract},
+            seed=_seed(),
+        )
 
 
 def test_codex_resolved_fallback_state_stays_out_of_durable_runtime_identity() -> None:
@@ -1381,6 +1406,77 @@ def test_automatic_codex_default_resume_uses_fingerprinted_native_inputs(
         )
         is False
     )
+
+
+def test_automatic_codex_default_resume_rejects_a_different_executable_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The automatic default is bound to its resolved Codex executable."""
+    monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
+    first_cli = tmp_path / "codex-a"
+    second_cli = tmp_path / "codex-b"
+    for cli in (first_cli, second_cli):
+        cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        cli.chmod(0o755)
+
+    original_runtime = CodexCliRuntime(cli_path=first_cli, model=None, cwd="/tmp/project")
+    original_runtime._runtime_profile = None
+    original_runtime._codex_profile = None
+    original_runtime._resolved_fallback_model = None
+    original_runtime._resolved_fallback_profile = None
+    persisted = OrchestratorRunner(
+        original_runtime, AsyncMock(), MagicMock()
+    )._build_execution_contract(seed=_seed())
+
+    persisted_identity = persisted["model_routing"]["runtime_execution"]["identity"]
+    assert persisted_identity["cli_executable_path"] == str(first_cli.absolute())
+
+    resumed_runtime = CodexCliRuntime(cli_path=second_cli, model=None, cwd="/tmp/project")
+    resumed_runtime._runtime_profile = None
+    resumed_runtime._codex_profile = None
+    resumed_runtime._resolved_fallback_model = None
+    resumed_runtime._resolved_fallback_profile = None
+    resumed = OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())
+
+    with pytest.raises(OrchestratorError, match="different runtime execution profile"):
+        resumed._restore_execution_contract(
+            {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
+            seed=_seed(),
+        )
+
+
+def test_automatic_codex_default_resume_rejects_in_place_cli_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The same executable path must not conceal a changed Codex version."""
+    monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\necho codex 1.0\n", encoding="utf-8")
+    cli.chmod(0o755)
+
+    original_runtime = CodexCliRuntime(cli_path=cli, model=None, cwd="/tmp/project")
+    original_runtime._runtime_profile = None
+    original_runtime._codex_profile = None
+    original_runtime._resolved_fallback_model = None
+    original_runtime._resolved_fallback_profile = None
+    persisted = OrchestratorRunner(
+        original_runtime, AsyncMock(), MagicMock()
+    )._build_execution_contract(seed=_seed())
+
+    cli.write_text("#!/bin/sh\necho codex 2.0\n", encoding="utf-8")
+    resumed_runtime = CodexCliRuntime(cli_path=cli, model=None, cwd="/tmp/project")
+    resumed_runtime._runtime_profile = None
+    resumed_runtime._codex_profile = None
+    resumed_runtime._resolved_fallback_model = None
+    resumed_runtime._resolved_fallback_profile = None
+
+    with pytest.raises(OrchestratorError, match="different runtime execution profile"):
+        OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())._restore_execution_contract(
+            {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
+            seed=_seed(),
+        )
 
 
 def test_non_codex_subclass_does_not_inherit_codex_profile_as_model_identity(
