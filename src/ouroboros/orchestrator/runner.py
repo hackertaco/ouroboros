@@ -6222,7 +6222,6 @@ class OrchestratorRunner:
                 and persisted_llm_backend is None
             )
             or not self._valid_permission_mode_contract(persisted_permission_mode)
-<<<<<<< HEAD
             or (
                 not migrate_v2_contract
                 and (
