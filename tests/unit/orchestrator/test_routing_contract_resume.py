@@ -956,6 +956,22 @@ def test_dormant_model_routing_still_rejects_reasoning_effort_drift() -> None:
         resumed._restore_execution_contract({EXECUTION_CONTRACT_PROGRESS_KEY: persisted})
 
 
+def test_resume_rejects_changed_base_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The effort used to form each dispatch is part of resume identity."""
+    monkeypatch.setattr("ouroboros.config.get_agent_reasoning_effort", lambda: "low")
+    original = _runner()
+    persisted = original._build_execution_contract()
+
+    assert persisted["model_routing"]["base_reasoning_effort"] == "low"
+
+    monkeypatch.setattr("ouroboros.config.get_agent_reasoning_effort", lambda: "high")
+    resumed = _runner()
+    with pytest.raises(OrchestratorError, match="different reasoning effort"):
+        resumed._restore_execution_contract({EXECUTION_CONTRACT_PROGRESS_KEY: persisted})
+
+
 def test_explicit_resume_tier_override_replaces_persisted_contract() -> None:
     original = _runner()
     _use_frontier_custom_routing(original)

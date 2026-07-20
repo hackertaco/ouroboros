@@ -754,6 +754,7 @@ PRE_RESOLVED_EFFECT_INPUTS_EXECUTION_CONTRACT_VERSION = 6
 PRE_DURABLE_PAUSE_POLICY_EXECUTION_CONTRACT_VERSION = 7
 PRE_RUNTIME_EFFECT_CAPABILITIES_EXECUTION_CONTRACT_VERSION = 8
 FRUGALITY_PROOF_PROTOCOL_VERSION = 1
+_MISSING = object()
 EXECUTION_CONTRACT_PROGRESS_KEY = "execution_contract"
 FORCED_EXECUTION_PERMISSION_MODE = "bypassPermissions"
 
@@ -5470,6 +5471,10 @@ class OrchestratorRunner:
             effort=self._reasoning_effort,
         )
         routing_contract["route_compat"] = serialize_route_compat_contract(route_projection)
+        # This base effort reaches both direct runner dispatches and the
+        # parallel executor. Persist it beside model routing so a config/env
+        # change cannot silently alter ``model_reasoning_effort`` on resume.
+        routing_contract["base_reasoning_effort"] = self._reasoning_effort
         routing_contract["constructor_model"] = self._constructor_model_contract()
         routing_contract["runtime_execution"] = self._runtime_execution_identity_contract()
         routing_contract["runtime_backend"] = self._runtime_backend_contract()
@@ -6141,7 +6146,17 @@ class OrchestratorRunner:
         persisted_reasoning_effort = (
             self._reasoning_effort if migrate_v2_contract else raw_routing.get("reasoning_effort")
         )
+        persisted_base_reasoning_effort = raw_routing.get("base_reasoning_effort", _MISSING)
         persisted_resume_workspace = raw_resume.get("workspace")
+        base_reasoning_effort_migrated = persisted_base_reasoning_effort is _MISSING
+        valid_base_reasoning_effort = (
+            base_reasoning_effort_migrated
+            or (persisted_base_reasoning_effort is None)
+            or (
+                isinstance(persisted_base_reasoning_effort, str)
+                and persisted_base_reasoning_effort in {"low", "medium", "high", "xhigh"}
+            )
+        )
         valid_seed_fingerprint = (
             isinstance(persisted_seed_fingerprint, str)
             and len(persisted_seed_fingerprint) == 64
@@ -6207,6 +6222,7 @@ class OrchestratorRunner:
                 and persisted_llm_backend is None
             )
             or not self._valid_permission_mode_contract(persisted_permission_mode)
+<<<<<<< HEAD
             or (
                 not migrate_v2_contract
                 and (
@@ -6227,6 +6243,7 @@ class OrchestratorRunner:
                 or prepared_live_execution
                 and persisted_resume_workspace is None
             )
+            or not valid_base_reasoning_effort
         ):
             raise OrchestratorError(
                 message="Cannot resume with an invalid execution contract",
@@ -6249,6 +6266,31 @@ class OrchestratorRunner:
                     "persisted_preferences": persisted_preferences.to_contract_data(),
                     "requested_preferences": self._execution_preferences.to_contract_data(),
                     "hint": "Start a new successor execution for an intentional change.",
+                },
+            )
+
+        # Older contracts predate the base effort field. Their historical
+        # effort is provably equivalent only when this invocation also resolves
+        # to None; otherwise fail closed rather than resume with a changed
+        # Codex/Claude effort level.
+        if base_reasoning_effort_migrated:
+            if self._reasoning_effort is not None:
+                raise OrchestratorError(
+                    message="Cannot resume because the prior reasoning effort is unknown",
+                    details={
+                        "persisted_base_reasoning_effort": None,
+                        "current_base_reasoning_effort": self._reasoning_effort,
+                        "hint": "Start a new session after changing reasoning effort.",
+                    },
+                )
+            persisted_base_reasoning_effort = None
+        elif persisted_base_reasoning_effort != self._reasoning_effort:
+            raise OrchestratorError(
+                message="Cannot resume with a different reasoning effort",
+                details={
+                    "persisted_base_reasoning_effort": persisted_base_reasoning_effort,
+                    "current_base_reasoning_effort": self._reasoning_effort,
+                    "hint": "Start a new session after changing reasoning effort.",
                 },
             )
 
@@ -6562,6 +6604,18 @@ class OrchestratorRunner:
         # router. Recomputing it from a resumed throwaway worktree would make the
         # same execution appear to be a different experiment.
         self._execution_contract = dict(raw_contract)
+        if preferences_migrated or base_reasoning_effort_migrated:
+            self._execution_contract["execution_preferences"] = (
+                persisted_preferences.to_contract_data()
+            )
+            if base_reasoning_effort_migrated:
+                migrated_routing = dict(raw_routing)
+                migrated_routing["base_reasoning_effort"] = None
+                self._execution_contract["model_routing"] = migrated_routing
+                migrated_proof = dict(raw_proof)
+                migrated_proof["routing_fingerprint"] = self._routing_fingerprint(migrated_routing)
+                self._execution_contract["frugality_proof"] = migrated_proof
+            return True
         return False
 
     def _restore_execution_contract_snapshot(
