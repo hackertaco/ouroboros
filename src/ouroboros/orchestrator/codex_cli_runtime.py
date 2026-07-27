@@ -738,8 +738,7 @@ class CodexCliRuntime:
             digest.update(b"\0")
         return digest.hexdigest()
 
-    @staticmethod
-    def _stable_global_codex_config_bytes(contents: bytes) -> bytes:
+    def _stable_global_codex_config_bytes(self, contents: bytes) -> bytes:
         """Ignore Codex's automatic per-cwd trust bookkeeping in drift checks.
 
         ``codex exec`` adds ``projects.<cwd>.trust_level`` on first use. That
@@ -768,6 +767,23 @@ class CodexCliRuntime:
                 parsed["projects"] = retained_projects
             else:
                 parsed.pop("projects", None)
+
+        profiles = parsed.get("profiles")
+        if isinstance(profiles, dict):
+            reachable_profiles = {
+                profile
+                for profile in (self._codex_profile, self._resolved_fallback_profile)
+                if isinstance(profile, str) and profile.strip()
+            }
+            retained_profiles = {
+                str(name): settings
+                for name, settings in profiles.items()
+                if str(name) in reachable_profiles
+            }
+            if retained_profiles:
+                parsed["profiles"] = retained_profiles
+            else:
+                parsed.pop("profiles", None)
 
         return json.dumps(
             parsed,

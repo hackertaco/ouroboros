@@ -86,6 +86,37 @@ class TestConfigShow:
         assert result.exit_code == 0
         assert "/usr/bin/codex" in result.output
 
+    def test_show_codex_cli_path_uses_runtime_wrapper_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Effective config output must report the executable runtime will launch."""
+        wrapper = tmp_path / "codex-wrapper"
+        wrapper.write_bytes(b"\xcf\xfa\xed\xfe" + b"zeude wrapper:codex")
+        wrapper.chmod(0o755)
+        real_dir = tmp_path / "bin"
+        real_dir.mkdir()
+        real_cli = real_dir / "codex"
+        real_cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        real_cli.chmod(0o755)
+
+        config = {
+            "orchestrator": {
+                "runtime_backend": "codex",
+                "codex_cli_path": str(wrapper),
+            },
+            "llm": {"backend": "codex"},
+            "logging": {"level": "info"},
+        }
+        (tmp_path / "config.yaml").write_text(yaml.dump(config), encoding="utf-8")
+
+        monkeypatch.setenv("PATH", str(real_dir))
+        with patch("ouroboros.config.models.get_config_dir", return_value=tmp_path):
+            result = runner.invoke(app, ["show", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["environment"]["cli_path"] == str(real_cli)
+
     def test_show_database_path_from_persistence(self, config_dir: Path) -> None:
         """config show should resolve persistence.database_path under config dir."""
         with patch("ouroboros.config.models.get_config_dir", return_value=config_dir):
@@ -163,20 +194,18 @@ class TestConfigBackend:
         assert result.exit_code == 0
         assert "claude" in result.output
 
-    def test_show_current_codex_backend_uses_canonical_detection(
-        self, codex_config_dir: Path
-    ) -> None:
+    def test_show_current_codex_backend_uses_runtime_resolver(self, codex_config_dir: Path) -> None:
         with (
             patch("ouroboros.config.models.get_config_dir", return_value=codex_config_dir),
             patch(
                 "ouroboros.cli.commands.setup._detect_runtimes",
-                return_value={"codex": "/resolved/codex"},
+                side_effect=AssertionError("config backend must use the runtime resolver"),
             ),
         ):
             result = runner.invoke(app, ["backend"])
 
         assert result.exit_code == 0
-        assert "/resolved/codex" in result.output
+        assert "/usr/bin/codex" in result.output
 
     def test_switch_to_same_backend(self, config_dir: Path) -> None:
         with patch("ouroboros.config.models.get_config_dir", return_value=config_dir):

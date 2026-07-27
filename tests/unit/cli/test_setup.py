@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from unittest.mock import AsyncMock, patch
@@ -1328,6 +1329,73 @@ class TestCodexSetup:
         assert (codex_home / "sessions" / "active.jsonl").read_text(encoding="utf-8") == (
             "user session created during setup\n"
         )
+
+    def test_register_codex_mcp_server_preserves_existing_config_mode(self, tmp_path: Path) -> None:
+        """Rewriting Codex config must not widen a private existing file."""
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        codex_config.write_text('model = "gpt-test"\n', encoding="utf-8")
+        codex_config.chmod(0o600)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert setup_cmd._register_codex_mcp_server() is True
+
+        assert stat.S_IMODE(codex_config.stat().st_mode) == 0o600
+        assert "[mcp_servers.ouroboros]" in codex_config.read_text(encoding="utf-8")
+
+    def test_setup_codex_rollback_preserves_codex_symlink_topology(self, tmp_path: Path) -> None:
+        """Late rollback must restore symlinks as symlinks, not regular files."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original_config = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original_config, encoding="utf-8")
+
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        target_dir = tmp_path / "targets"
+        target_dir.mkdir()
+        config_target = target_dir / "config-target.toml"
+        original_toml = '[mcp_servers.ouroboros]\ncommand = "old"\n'
+        config_target.write_text(original_toml, encoding="utf-8")
+        codex_config = codex_home / "config.toml"
+        codex_config.symlink_to(config_target)
+
+        skills_target = target_dir / "ouroboros-welcome"
+        skills_target.mkdir()
+        (skills_target / "SKILL.md").write_text("old skill\n", encoding="utf-8")
+        (codex_home / "skills").mkdir()
+        skill_link = codex_home / "skills" / "ouroboros-welcome"
+        skill_link.symlink_to(skills_target, target_is_directory=True)
+
+        def _install_artifacts() -> bool:
+            config_target.write_text('[mcp_servers.ouroboros]\ncommand = "new"\n', encoding="utf-8")
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._install_codex_artifacts",
+                side_effect=_install_artifacts,
+            ),
+            patch("ouroboros.cli.commands.setup._codex_uses_profile_v2", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                return_value=False,
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.read_text(encoding="utf-8") == original_config
+        assert codex_config.is_symlink()
+        assert os.readlink(codex_config) == str(config_target)
+        assert config_target.read_text(encoding="utf-8") == original_toml
+        assert skill_link.is_symlink()
+        assert os.readlink(skill_link) == str(skills_target)
+        assert (skills_target / "SKILL.md").read_text(encoding="utf-8") == "old skill\n"
 
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path

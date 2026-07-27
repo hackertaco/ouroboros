@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 from typing import Annotated, Literal
@@ -1520,58 +1522,78 @@ def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
     path.write_bytes(snapshot)
 
 
-def _snapshot_path(path: Path) -> dict[Path, bytes] | bytes | None:
-    """Snapshot a single managed file or directory tree.
+@dataclass(frozen=True)
+class _PathSnapshot:
+    """Topology-preserving snapshot for one managed setup path."""
 
-    ``None`` means the path did not exist.  Directory snapshots are relative to
-    the managed root; restoring them never walks or prunes the parent
-    CODEX_HOME.
-    """
-    if not path.exists():
-        return None
-    if path.is_file() or path.is_symlink():
-        return path.read_bytes()
-    if not path.is_dir():
-        return None
-
-    snapshot: dict[Path, bytes] = {}
-    for child in path.rglob("*"):
-        if child.is_file():
-            snapshot[child.relative_to(path)] = child.read_bytes()
-    return snapshot
+    kind: Literal["missing", "file", "directory", "symlink", "other"]
+    mode: int | None = None
+    contents: bytes | None = None
+    link_target: str | None = None
+    children: tuple[tuple[str, _PathSnapshot], ...] = ()
 
 
-def _restore_path_snapshot(path: Path, snapshot: dict[Path, bytes] | bytes | None) -> None:
+def _snapshot_path(path: Path) -> _PathSnapshot:
+    """Snapshot a managed file or directory without following symlinks."""
+    try:
+        stat_result = path.lstat()
+    except FileNotFoundError:
+        return _PathSnapshot(kind="missing")
+
+    mode = stat.S_IMODE(stat_result.st_mode)
+    if stat.S_ISLNK(stat_result.st_mode):
+        return _PathSnapshot(kind="symlink", mode=mode, link_target=os.readlink(path))
+    if stat.S_ISREG(stat_result.st_mode):
+        return _PathSnapshot(kind="file", mode=mode, contents=path.read_bytes())
+    if not stat.S_ISDIR(stat_result.st_mode):
+        return _PathSnapshot(kind="other", mode=mode)
+
+    children: list[tuple[str, _PathSnapshot]] = []
+    for child in sorted(path.iterdir(), key=lambda item: item.name):
+        children.append((child.name, _snapshot_path(child)))
+    return _PathSnapshot(kind="directory", mode=mode, children=tuple(children))
+
+
+def _remove_path_topology(path: Path) -> None:
+    """Remove a path without following directory symlinks."""
+    try:
+        stat_result = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(stat_result.st_mode) and not stat.S_ISLNK(stat_result.st_mode):
+        for child in path.iterdir():
+            _remove_path_topology(child)
+        path.rmdir()
+    else:
+        path.unlink()
+
+
+def _restore_path_snapshot(path: Path, snapshot: _PathSnapshot) -> None:
     """Restore one managed path without touching sibling Codex user state."""
-    if isinstance(snapshot, bytes):
-        _restore_file_snapshot(path, snapshot)
+    if snapshot.kind == "missing":
+        _remove_path_topology(path)
         return
 
-    if path.exists():
-        if path.is_dir():
-            for child in sorted(path.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-                if child.is_file() or child.is_symlink():
-                    child.unlink()
-                elif child.is_dir():
-                    try:
-                        child.rmdir()
-                    except OSError:
-                        pass
-            try:
-                path.rmdir()
-            except OSError:
-                pass
-        else:
-            path.unlink()
+    _remove_path_topology(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    if snapshot is None:
+    if snapshot.kind == "symlink":
+        if snapshot.link_target is not None:
+            os.symlink(snapshot.link_target, path)
         return
 
-    path.mkdir(parents=True, exist_ok=True)
-    for relative_path, contents in snapshot.items():
-        target = path / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(contents)
+    if snapshot.kind == "file":
+        path.write_bytes(snapshot.contents or b"")
+        if snapshot.mode is not None:
+            path.chmod(snapshot.mode)
+        return
+
+    if snapshot.kind == "directory":
+        path.mkdir(parents=True, exist_ok=True)
+        if snapshot.mode is not None:
+            path.chmod(snapshot.mode)
+        for child_name, child_snapshot in snapshot.children:
+            _restore_path_snapshot(path / child_name, child_snapshot)
 
 
 def _managed_codex_setup_paths(codex_home: Path) -> tuple[Path, ...]:
@@ -1614,13 +1636,13 @@ def _managed_codex_setup_paths(codex_home: Path) -> tuple[Path, ...]:
 
 def _snapshot_managed_codex_setup_paths(
     codex_home: Path,
-) -> dict[Path, dict[Path, bytes] | bytes | None]:
+) -> dict[Path, _PathSnapshot]:
     """Snapshot setup-owned Codex paths without snapshotting the whole home."""
     return {path: _snapshot_path(path) for path in _managed_codex_setup_paths(codex_home)}
 
 
 def _restore_managed_codex_setup_paths(
-    snapshot: dict[Path, dict[Path, bytes] | bytes | None],
+    snapshot: dict[Path, _PathSnapshot],
 ) -> None:
     """Restore only setup-owned Codex paths captured before setup."""
     for path, path_snapshot in snapshot.items():
@@ -3042,7 +3064,7 @@ def _bridge_plugin_source_text() -> str | None:
         return None
 
 
-def _atomic_write_text(path: Path, content: str, *, mode: int = 0o644) -> None:
+def _atomic_write_text(path: Path, content: str, *, mode: int | None = None) -> None:
     """Write *content* to *path* atomically — temp file + ``os.replace``.
 
     Readers always see either the pre-existing file or the final content —
@@ -3053,18 +3075,24 @@ def _atomic_write_text(path: Path, content: str, *, mode: int = 0o644) -> None:
     import os
     import tempfile
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    write_path = path.resolve(strict=False) if path.is_symlink() else path
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(write_path.lstat().st_mode)
+        except FileNotFoundError:
+            mode = 0o644
     fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
+        prefix=f".{write_path.name}.",
         suffix=".tmp",
-        dir=str(path.parent),
+        dir=str(write_path.parent),
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
-        os.replace(tmp_name, path)
+        os.replace(tmp_name, write_path)
         try:
-            os.chmod(path, mode)
+            os.chmod(write_path, mode)
         except OSError:
             pass  # e.g. Windows FAT — not fatal
     except OSError:

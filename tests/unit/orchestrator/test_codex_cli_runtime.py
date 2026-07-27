@@ -85,6 +85,54 @@ def test_codex_config_fingerprint_still_detects_project_runtime_overrides(
         runtime._assert_codex_config_files_unchanged()
 
 
+def test_codex_config_fingerprint_ignores_unreachable_embedded_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config_path = codex_home / "config.toml"
+    config_path.write_text(
+        'model = "gpt-test"\n\n[profiles.unused]\nmodel = "unused-a"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    runtime._resolved_fallback_profile = "reachable"
+    original = runtime._fingerprint_codex_config_files()
+
+    config_path.write_text(
+        'model = "gpt-test"\n\n[profiles.unused]\nmodel = "unused-b"\n',
+        encoding="utf-8",
+    )
+
+    assert runtime._fingerprint_codex_config_files() == original
+
+
+def test_codex_config_fingerprint_tracks_reachable_embedded_profiles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config_path = codex_home / "config.toml"
+    config_path.write_text(
+        'model = "gpt-test"\n\n[profiles.reachable]\nmodel = "reachable-a"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    runtime._resolved_fallback_profile = "reachable"
+    original = runtime._fingerprint_codex_config_files()
+
+    config_path.write_text(
+        'model = "gpt-test"\n\n[profiles.reachable]\nmodel = "reachable-b"\n',
+        encoding="utf-8",
+    )
+
+    assert runtime._fingerprint_codex_config_files() != original
+
+
 def test_codex_config_fingerprint_ignores_unreachable_profile_v2_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -600,7 +600,10 @@ class SettingsApp(App[None]):
                 self._refresh_stage_model_options(stage)
             self._refresh_install_warning(stage, event.value)
         elif select_id == "global-runtime":
-            self._remember_agent_selection(self._selected_default_runtime())
+            if not _is_blank(event.value):
+                self._remember_agent_selection(str(event.value))
+            else:
+                self._remember_agent_selection(self._selected_default_runtime())
             # Cascade: every inheriting card re-resolves its agent and pulls
             # the matching model catalog. Guard per card so one failure
             # cannot skip the rest.

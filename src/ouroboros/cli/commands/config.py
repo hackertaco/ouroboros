@@ -23,6 +23,7 @@ from ouroboros.backends import (
 from ouroboros.cli.formatters import console
 from ouroboros.cli.formatters.panels import print_error, print_info, print_success, print_warning
 from ouroboros.cli.formatters.tables import create_key_value_table, create_table, print_table
+from ouroboros.codex.cli_policy import resolve_codex_cli_path
 
 app = typer.Typer(
     name="config",
@@ -78,6 +79,18 @@ def main(
 
 
 _VALID_BACKENDS = runtime_backend_choices()
+
+
+class _ConfigCliPathLogger:
+    """No-op logger for shared resolver use inside user-facing config output."""
+
+    def warning(self, *_args: object, **_kwargs: object) -> None:
+        return
+
+    def info(self, *_args: object, **_kwargs: object) -> None:
+        return
+
+
 _SWITCHABLE_BACKENDS = tuple(
     backend
     for backend in _VALID_BACKENDS
@@ -174,11 +187,16 @@ def _resolve_cli_path(data: dict) -> str | None:
     )
     resolved_backend = _normalize_runtime_backend_for_display(backend)
     if resolved_backend == "codex":
-        from ouroboros.cli.commands.setup import _detect_runtimes
+        from ouroboros.config import get_codex_cli_path
 
-        detected_path = _detect_runtimes().get("codex")
-        if detected_path:
-            return detected_path
+        configured = get_codex_cli_path() or data.get("orchestrator", {}).get("codex_cli_path")
+        resolution = resolve_codex_cli_path(
+            explicit_cli_path=None,
+            configured_cli_path=configured,
+            logger=_ConfigCliPathLogger(),
+            log_namespace="config",
+        )
+        return resolution.cli_path
 
     env_var = _CLI_PATH_ENV_BY_BACKEND.get(resolved_backend)
     if env_var:

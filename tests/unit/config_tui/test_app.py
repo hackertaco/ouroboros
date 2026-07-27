@@ -552,6 +552,30 @@ async def test_runtime_only_agent_is_not_synced_to_llm_backend(app_env, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_env_runtime_override_syncs_llm_backend_to_staged_global_selection(
+    app_env, monkeypatch
+) -> None:
+    """Saving a staged global Agent under an env override must remain coherent after unset."""
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex", "hermes": "/bin/hermes"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one("#global-runtime", Select).value = "hermes"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_backend"] == "hermes"
+    assert captured["llm.backend"] == "hermes"
+
+
+@pytest.mark.asyncio
 async def test_execute_backend_change_clears_stale_execute_model_pin(app_env, monkeypatch) -> None:
     """Changing Execute's effective backend must not preserve an incompatible hidden pin."""
     app_env.setdefault("execution", {})["default_model"] = "gpt-5"
