@@ -903,7 +903,7 @@ class SettingsApp(App[None]):
                     if model_text == DEFAULT_MODEL_SENTINEL and not uses_default_model_sentinel(
                         self._selected_runtime(stage)
                     ):
-                        if get_value(self._raw, model_field.key) == DEFAULT_MODEL_SENTINEL:
+                        if get_value(self._raw, model_field.key) is not None:
                             changes[model_field.key] = None
                         continue
                     record(model_field.key, model_text)

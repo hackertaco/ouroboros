@@ -1045,6 +1045,36 @@ class TestCodexSetup:
         assert any("Configure Ouroboros runtime" in message for message in info_messages)
         assert any("profiles you manage yourself" in message for message in info_messages)
 
+    def test_setup_codex_does_not_save_config_when_mcp_registration_fails(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Codex setup must not persist a Codex runtime without a usable MCP endpoint."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original, encoding="utf-8")
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        (codex_home / "config.toml").write_text("[mcp_servers.ouroboros\n", encoding="utf-8")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts") as mock_install,
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles") as mock_retire,
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile"
+            ) as mock_worker_profile,
+        ):
+            setup_cmd._setup_codex("/usr/local/bin/codex")
+
+        assert config_path.read_text(encoding="utf-8") == original
+        mock_install.assert_not_called()
+        mock_retire.assert_not_called()
+        mock_worker_profile.assert_not_called()
+
     def test_fresh_codex_setup_installs_every_role_effort_mapping(self, tmp_path: Path) -> None:
         """Generated legacy defaults are not user pins that suppress Codex roles."""
         config_dir = tmp_path / ".ouroboros"
@@ -1402,6 +1432,10 @@ class TestClaudeSetup:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch(
+                "ouroboros.cli.commands.setup.shutil.which",
+                side_effect=lambda cmd: "/usr/local/bin/uvx" if cmd == "uvx" else None,
+            ),
         ):
             setup_cmd._setup_claude("/usr/local/bin/claude")
 
@@ -1502,6 +1536,10 @@ class TestClaudeSetup:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch(
+                "ouroboros.cli.commands.setup.shutil.which",
+                side_effect=lambda cmd: "/usr/local/bin/uvx" if cmd == "uvx" else None,
+            ),
         ):
             setup_cmd._setup_claude("/usr/local/bin/claude")
 
@@ -1570,6 +1608,10 @@ class TestClaudeSetup:
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch(
+                "ouroboros.cli.commands.setup.shutil.which",
+                side_effect=lambda cmd: "/usr/local/bin/uvx" if cmd == "uvx" else None,
+            ),
         ):
             setup_cmd._setup_claude("/usr/local/bin/claude")
 

@@ -115,6 +115,39 @@ async def test_agent_change_resets_incompatible_stage_model(app_env) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "model_key"),
+    [
+        (Stage.INTERVIEW, "clarification.default_model"),
+        (Stage.EVALUATE, "evaluation.semantic_model"),
+        (Stage.REFLECT, "resilience.reflect_model"),
+    ],
+)
+async def test_saving_agent_change_clears_incompatible_codex_stage_pin(
+    app_env,
+    monkeypatch,
+    stage: Stage,
+    model_key: str,
+) -> None:
+    """A Codex model pin must not survive after its stage switches to Claude."""
+    app_env["orchestrator"]["runtime_profile"]["stages"][stage.value] = "codex"
+    section, key = model_key.split(".", 1)
+    app_env.setdefault(section, {})[key] = "gpt-5.6-sol"
+    applied: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: applied.update(values))
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one(f"#stage-runtime-{stage.value}", Select).value = "claude"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert applied[f"orchestrator.runtime_profile.stages.{stage.value}"] == "claude"
+    assert applied[model_key] is None
+
+
+@pytest.mark.asyncio
 async def test_selecting_uninstalled_runtime_shows_install_warning(app_env) -> None:
     app = SettingsApp()
     async with app.run_test() as pilot:

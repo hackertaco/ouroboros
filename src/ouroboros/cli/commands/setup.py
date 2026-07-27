@@ -449,6 +449,17 @@ def _codex_mcp_entry_from_toml(data: dict[str, object]) -> dict[str, object] | N
     return entry if isinstance(entry, dict) else None
 
 
+def _codex_mcp_entry_has_endpoint(entry: dict[str, object] | None) -> bool:
+    """Return whether a Codex MCP entry has a usable command or URL."""
+    if not isinstance(entry, dict):
+        return False
+    for key in ("command", "url"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def _is_source_tree_ouroboros_build() -> bool:
     """Return whether this module is executing from an Ouroboros source tree.
 
@@ -756,13 +767,29 @@ def _codex_uses_profile_v2(codex_path: str | None = None) -> bool:
     return False
 
 
-def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> None:
+def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> bool:
     """Register the Ouroboros MCP/env hookup in ~/.codex/config.toml."""
     import tomllib
 
     if mode == "preserve":
+        codex_config = resolve_codex_home() / "config.toml"
+        if codex_config.exists():
+            try:
+                parsed = tomllib.loads(codex_config.read_text(encoding="utf-8"))
+            except tomllib.TOMLDecodeError:
+                print_error(f"Could not parse {codex_config} — Codex setup not saved.")
+                return False
+            if not _codex_mcp_entry_has_endpoint(_codex_mcp_entry_from_toml(parsed)):
+                print_error(
+                    "Preserved Codex MCP config does not define a usable Ouroboros "
+                    "command or URL; Codex setup not saved."
+                )
+                return False
+        else:
+            print_error(f"{codex_config} does not exist — Codex setup not saved.")
+            return False
         print_info("Preserved Codex MCP config.")
-        return
+        return True
 
     codex_config = resolve_codex_home() / "config.toml"
     codex_config.parent.mkdir(parents=True, exist_ok=True)
@@ -772,11 +799,17 @@ def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> None:
         try:
             parsed = tomllib.loads(raw)
         except tomllib.TOMLDecodeError:
-            print_error(f"Could not parse {codex_config} — skipping MCP registration.")
-            return
+            print_error(f"Could not parse {codex_config} — Codex setup not saved.")
+            return False
 
         entry = _codex_mcp_entry_from_toml(parsed)
         has_managed_comment = _has_managed_codex_mcp_comment(raw)
+        if entry is not None and not _codex_mcp_entry_has_endpoint(entry):
+            print_error(
+                "Existing Codex Ouroboros MCP config has no usable command or URL; "
+                "Codex setup not saved. Use --mcp-mode stdio to replace it."
+            )
+            return False
         if (
             mode == "auto"
             and entry is not None
@@ -788,12 +821,12 @@ def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> None:
                 "Preserved existing user-managed Ouroboros MCP config in "
                 f"{codex_config}. Use --mcp-mode stdio to replace it."
             )
-            return
+            return True
 
         updated_raw, existed_before = _upsert_codex_mcp_section(raw)
         if updated_raw == raw:
             print_info("Codex MCP server already up to date.")
-            return
+            return True
 
         codex_config.write_text(updated_raw, encoding="utf-8")
         if existed_before:
@@ -803,6 +836,7 @@ def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> None:
     else:
         codex_config.write_text(_render_codex_mcp_section().lstrip("\n"), encoding="utf-8")
         print_success(f"Registered Ouroboros MCP server in {codex_config}")
+    return True
 
 
 def _render_codex_profile_section(name: str, settings: _CodexProfileSettings) -> str:
@@ -1455,7 +1489,7 @@ def _install_codex_artifacts() -> None:
 
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
     """Configure Ouroboros for the Codex runtime."""
-    from ouroboros.config.loader import create_default_config, ensure_config_dir
+    from ouroboros.config.loader import create_default_config, ensure_config_dir, get_default_config
 
     config_dir = ensure_config_dir()
     config_path = config_dir / "config.yaml"
@@ -1464,8 +1498,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
     if not fresh_config:
         config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     else:
-        create_default_config(config_dir)
-        config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        config_dict = get_default_config().model_dump(mode="json")
 
     if not isinstance(config_dict, dict):
         print_error("Invalid non-mapping config.yaml contents; aborting without changes.")
@@ -1490,6 +1523,16 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
         print_error(f"Invalid config.yaml structure: {exc}")
         print_info("Aborting Codex setup without rewriting config.yaml.")
         return
+
+    # Register MCP before committing Codex runtime selection.  A config.yaml that
+    # says "codex" without a launchable Codex MCP endpoint strands first-use
+    # setup in a false-success state.
+    if not _register_codex_mcp_server(mode=mcp_mode):
+        print_info("Aborting Codex setup without rewriting config.yaml.")
+        return
+
+    if fresh_config:
+        create_default_config(config_dir)
 
     with config_path.open("w", encoding="utf-8") as f:
         yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
@@ -1516,8 +1559,6 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
     # Install Codex-native rules and skills into ~/.codex/
     _install_codex_artifacts()
 
-    # Register MCP server in Codex config (~/.codex/config.toml)
-    _register_codex_mcp_server(mode=mcp_mode)
     _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
     _register_codex_worker_profile(codex_path=codex_path)
     _print_codex_config_guidance(config_path)

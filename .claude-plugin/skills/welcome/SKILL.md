@@ -72,12 +72,36 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
+
 config_path, mcp_path = map(Path, sys.argv[1:])
 
 def yaml_mapping(source: str) -> dict[str, dict[str, str]]:
     """Read the top-level mapping scalars this readiness gate owns."""
+    if yaml is not None:
+        loaded = yaml.safe_load(source) or {}
+        return loaded if isinstance(loaded, dict) else {}
+
     parsed: dict[str, dict[str, str]] = {}
     section: str | None = None
+
+    def scalar_value(raw: str) -> str:
+        return raw.strip().split(" #", 1)[0].strip().rstrip(",}").strip().strip("'\"")
+
+    def flow_mapping(raw: str) -> dict[str, str]:
+        value = raw.strip().split(" #", 1)[0].strip()
+        if not (value.startswith("{") and value.endswith("}")):
+            return {}
+        fields: dict[str, str] = {}
+        for part in value[1:-1].split(","):
+            key, separator, field_value = part.partition(":")
+            if separator:
+                fields[key.strip().strip("'\"")] = scalar_value(field_value)
+        return fields
+
     for raw_line in source.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -85,12 +109,11 @@ def yaml_mapping(source: str) -> dict[str, dict[str, str]]:
         key, separator, raw_value = raw_line.strip().partition(":")
         if not separator:
             continue
-        value = raw_value.strip().split(" #", 1)[0].strip().strip("'\"")
         if indent == 0:
             section = key.strip("'\"")
-            parsed.setdefault(section, {})
+            parsed[section] = flow_mapping(raw_value)
         elif section is not None:
-            parsed[section][key.strip("'\"")] = value
+            parsed.setdefault(section, {})[key.strip("'\"")] = scalar_value(raw_value)
     return parsed
 
 try:
@@ -197,12 +220,36 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
+
 config_path, mcp_path = map(Path, sys.argv[1:])
 
 def yaml_mapping(source: str) -> dict[str, dict[str, str]]:
     """Read only the top-level mapping scalars owned by this readiness gate."""
+    if yaml is not None:
+        loaded = yaml.safe_load(source) or {}
+        return loaded if isinstance(loaded, dict) else {}
+
     parsed: dict[str, dict[str, str]] = {}
     section: str | None = None
+
+    def scalar_value(raw: str) -> str:
+        return raw.strip().split(" #", 1)[0].strip().rstrip(",}").strip().strip("'\"")
+
+    def flow_mapping(raw: str) -> dict[str, str]:
+        value = raw.strip().split(" #", 1)[0].strip()
+        if not (value.startswith("{") and value.endswith("}")):
+            return {}
+        fields: dict[str, str] = {}
+        for part in value[1:-1].split(","):
+            key, separator, field_value = part.partition(":")
+            if separator:
+                fields[key.strip().strip("'\"")] = scalar_value(field_value)
+        return fields
+
     for raw_line in source.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -210,12 +257,11 @@ def yaml_mapping(source: str) -> dict[str, dict[str, str]]:
         key, separator, raw_value = raw_line.strip().partition(":")
         if not separator:
             continue
-        value = raw_value.strip().split(" #", 1)[0].strip().strip("'\"")
         if indent == 0:
             section = key.strip("'\"")
-            parsed.setdefault(section, {})
+            parsed[section] = flow_mapping(raw_value)
         elif section is not None:
-            parsed[section][key.strip("'\"")] = value
+            parsed.setdefault(section, {})[key.strip("'\"")] = scalar_value(raw_value)
     return parsed
 
 try:
