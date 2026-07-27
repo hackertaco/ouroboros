@@ -260,6 +260,68 @@ def test_show_json_uses_runtime_env_as_llm_backend_fallback(monkeypatch, tmp_pat
     }
 
 
+def test_show_json_normalizes_shipped_stage_defaults_for_codex(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {"runtime_backend": "codex"},
+            "clarification": {"default_model": "claude-opus-4-8"},
+            "evaluation": {"semantic_model": "claude-opus-4-8"},
+            "resilience": {"reflect_model": "claude-opus-4-8"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    for stage in ("interview", "evaluate", "reflect"):
+        assert payload["stages"][stage]["agent"] == "codex"
+        assert (
+            payload["stages"][stage]["model"]
+            == "Codex current selected model (concrete model not reported by Codex)"
+        )
+        assert payload["stages"][stage]["model_source"] == "automatic Codex selection"
+
+
+def test_show_json_cli_path_follows_effective_runtime_env(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {
+                "runtime_backend": "claude",
+                "cli_path": "/bin/claude",
+                "codex_cli_path": "/bin/codex-config",
+            }
+        },
+    )
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    monkeypatch.setenv("OUROBOROS_CODEX_CLI_PATH", "/bin/codex-env")
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex-env"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["defaults"]["default_agent"]["value"] == "codex"
+    assert payload["environment"]["cli_path"] == "/bin/codex-env"
+
+
 def test_show_text_uses_runtime_env_as_llm_backend_fallback(monkeypatch, tmp_path) -> None:
     _show_env(
         monkeypatch,

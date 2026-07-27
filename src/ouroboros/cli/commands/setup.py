@@ -183,27 +183,37 @@ def _detect_runtimes() -> dict[str, str | None]:
         path = shutil.which(name)
         runtimes[name] = path
 
-    # Codex: explicit-path config (env var / config.yaml) is authoritative over
-    # PATH and the App bundle when it points at a runnable executable.
-    try:
-        from ouroboros.config import get_codex_cli_path
+    # Codex: an explicit environment override is runtime-authoritative. If it
+    # is stale, do not silently fall back to PATH because subsequent execution
+    # would still select the broken env path.
+    env_codex_path = os.environ.get("OUROBOROS_CODEX_CLI_PATH", "").strip()
+    if env_codex_path:
+        configured = Path(env_codex_path).expanduser()
+        runtimes["codex"] = (
+            str(configured) if configured.is_file() and os.access(configured, os.X_OK) else None
+        )
+    else:
+        # Persisted config paths may be repaired by setup, so use them when
+        # runnable but still allow PATH/App discovery when they are stale.
+        try:
+            from ouroboros.config import get_codex_cli_path
 
-        codex_path = get_codex_cli_path()
-    except Exception:
-        codex_path = None
-    if codex_path:
-        configured = Path(codex_path)
-        if configured.is_file() and os.access(configured, os.X_OK):
-            runtimes["codex"] = str(configured)
+            codex_path = get_codex_cli_path()
+        except Exception:
+            codex_path = None
+        if codex_path:
+            configured = Path(codex_path)
+            if configured.is_file() and os.access(configured, os.X_OK):
+                runtimes["codex"] = str(configured)
 
-    # Codex App bundles this executable but does not always add it to the
-    # terminal PATH. Treat it as an available Codex runtime for App-only users.
-    if (
-        runtimes["codex"] is None
-        and _CODEX_APP_CLI_PATH.is_file()
-        and os.access(_CODEX_APP_CLI_PATH, os.X_OK)
-    ):
-        runtimes["codex"] = str(_CODEX_APP_CLI_PATH)
+        # Codex App bundles this executable but does not always add it to the
+        # terminal PATH. Treat it as an available Codex runtime for App-only users.
+        if (
+            runtimes["codex"] is None
+            and _CODEX_APP_CLI_PATH.is_file()
+            and os.access(_CODEX_APP_CLI_PATH, os.X_OK)
+        ):
+            runtimes["codex"] = str(_CODEX_APP_CLI_PATH)
 
     # Gemini: prefer explicit-path config (env var / config.yaml) over PATH.
     try:
@@ -1487,7 +1497,27 @@ def _install_codex_artifacts() -> None:
         print_error("Could not locate packaged Codex rules or skills.")
 
 
-def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
+def _snapshot_file(path: Path) -> bytes | None:
+    """Return a file snapshot for rollback, or ``None`` if it did not exist."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
+    """Restore a file snapshot captured before a setup side effect."""
+    if snapshot is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(snapshot)
+
+
+def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
     from ouroboros.config.loader import create_default_config, ensure_config_dir, get_default_config
 
@@ -1502,7 +1532,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
 
     if not isinstance(config_dict, dict):
         print_error("Invalid non-mapping config.yaml contents; aborting without changes.")
-        return
+        return False
 
     try:
         # Set runtime and LLM backend to codex
@@ -1522,20 +1552,28 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
     except ValueError as exc:
         print_error(f"Invalid config.yaml structure: {exc}")
         print_info("Aborting Codex setup without rewriting config.yaml.")
-        return
+        return False
 
     # Register MCP before committing Codex runtime selection.  A config.yaml that
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
+    codex_config_path = resolve_codex_home() / "config.toml"
+    codex_config_snapshot = _snapshot_file(codex_config_path)
     if not _register_codex_mcp_server(mode=mcp_mode):
         print_info("Aborting Codex setup without rewriting config.yaml.")
-        return
+        return False
 
-    if fresh_config:
-        create_default_config(config_dir)
-
-    with config_path.open("w", encoding="utf-8") as f:
-        yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+    try:
+        if fresh_config:
+            create_default_config(config_dir)
+        _atomic_write_text(
+            config_path, yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+        )
+    except OSError as exc:
+        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
+        print_error(f"Could not save Codex runtime config: {exc}")
+        print_info("Restored Codex MCP config; setup incomplete.")
+        return False
 
     print_success(f"Configured Codex runtime (CLI: {codex_path})")
     print_info(f"Config saved to: {config_path}")
@@ -1562,6 +1600,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> None:
     _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
     _register_codex_worker_profile(codex_path=codex_path)
     _print_codex_config_guidance(config_path)
+    return True
 
 
 def _install_hermes_artifacts() -> None:
@@ -3465,7 +3504,8 @@ def setup(
         if not codex_path:
             print_error("Codex CLI not found in PATH.")
             raise typer.Exit(1)
-        _setup_codex(codex_path, mcp_mode=_normalize_codex_mcp_mode(mcp_mode))
+        if not _setup_codex(codex_path, mcp_mode=_normalize_codex_mcp_mode(mcp_mode)):
+            raise typer.Exit(1)
     elif selected in ("opencode", "opencode_cli"):
         opencode_path = available.get("opencode")
         if not opencode_path:

@@ -73,6 +73,22 @@ class TestCodexSetup:
 
         assert detected["codex"] == str(configured)
 
+    def test_detect_runtimes_rejects_stale_codex_env_before_path(self, tmp_path: Path) -> None:
+        """A stale Codex env path must not be hidden by a valid PATH binary."""
+        path_codex = tmp_path / "path" / "codex"
+        path_codex.parent.mkdir(parents=True)
+        path_codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path_codex.chmod(0o755)
+
+        with (
+            patch.dict(os.environ, {"OUROBOROS_CODEX_CLI_PATH": str(tmp_path / "missing")}),
+            patch("ouroboros.cli.commands.setup.shutil.which", return_value=str(path_codex)),
+            patch("ouroboros.cli.commands.setup._CODEX_APP_CLI_PATH", tmp_path / "app-codex"),
+        ):
+            detected = setup_cmd._detect_runtimes()
+
+        assert detected["codex"] is None
+
     def test_codex_profile_provider_mapping_preserves_normalized_user_alias(self) -> None:
         """Setup must not shadow a user-owned Codex alias with a new canonical key."""
         profile = {"providers": {"CODEX_CLI": {"model": "user-pin"}}}
@@ -1009,7 +1025,7 @@ class TestCodexSetup:
             ) as mock_worker_profile,
             patch("ouroboros.cli.commands.setup.print_info") as mock_info,
         ):
-            setup_cmd._setup_codex("/usr/local/bin/codex")
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is True
 
         config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
@@ -1068,12 +1084,69 @@ class TestCodexSetup:
                 "ouroboros.cli.commands.setup._register_codex_worker_profile"
             ) as mock_worker_profile,
         ):
-            setup_cmd._setup_codex("/usr/local/bin/codex")
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
 
         assert config_path.read_text(encoding="utf-8") == original
         mock_install.assert_not_called()
         mock_retire.assert_not_called()
         mock_worker_profile.assert_not_called()
+
+    def test_setup_codex_rolls_back_mcp_when_config_write_fails(self, tmp_path: Path) -> None:
+        """Codex setup must not leave MCP configured when config.yaml fails."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original_config = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original_config, encoding="utf-8")
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        original_toml = '[mcp_servers.ouroboros]\ncommand = "old"\n'
+        codex_config.write_text(original_toml, encoding="utf-8")
+
+        def _register(**_kwargs: object) -> bool:
+            codex_config.write_text('[mcp_servers.ouroboros]\ncommand = "new"\n', encoding="utf-8")
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", side_effect=_register),
+            patch(
+                "ouroboros.cli.commands.setup._atomic_write_text",
+                side_effect=OSError("disk full"),
+            ),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts") as mock_install,
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles") as mock_retire,
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile"
+            ) as mock_worker_profile,
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.read_text(encoding="utf-8") == original_config
+        assert codex_config.read_text(encoding="utf-8") == original_toml
+        mock_install.assert_not_called()
+        mock_retire.assert_not_called()
+        mock_worker_profile.assert_not_called()
+
+    def test_setup_cli_codex_failure_exits_before_success_banner(self) -> None:
+        """Top-level setup must propagate Codex setup failure to exit status."""
+        runner = CliRunner()
+        with (
+            patch(
+                "ouroboros.cli.commands.setup._detect_runtimes",
+                return_value={"claude": None, "codex": "/usr/bin/codex", "opencode": None},
+            ),
+            patch("ouroboros.cli.commands.setup._setup_codex", return_value=False),
+        ):
+            result = runner.invoke(
+                setup_cmd.app,
+                ["--runtime", "codex", "--non-interactive"],
+            )
+
+        assert result.exit_code == 1
+        assert "Setup complete!" not in result.output
 
     def test_fresh_codex_setup_installs_every_role_effort_mapping(self, tmp_path: Path) -> None:
         """Generated legacy defaults are not user pins that suppress Codex roles."""

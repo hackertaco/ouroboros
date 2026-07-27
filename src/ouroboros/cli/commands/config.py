@@ -5,6 +5,7 @@ Manage configuration settings and provider setup.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
 from typing import Annotated, get_args, get_origin
@@ -81,6 +82,20 @@ _SWITCHABLE_BACKENDS = tuple(
     if (capability := get_backend_capability(backend)) is not None and capability.switchable_runtime
 )
 
+_CLI_PATH_ENV_BY_BACKEND = {
+    "claude": "OUROBOROS_CLI_PATH",
+    "codex": "OUROBOROS_CODEX_CLI_PATH",
+    "copilot": "OUROBOROS_COPILOT_CLI_PATH",
+    "gemini": "OUROBOROS_GEMINI_CLI_PATH",
+    "goose": "OUROBOROS_GOOSE_CLI_PATH",
+    "gjc": "OUROBOROS_GJC_CLI_PATH",
+    "hermes": "OUROBOROS_HERMES_CLI_PATH",
+    "kiro": "OUROBOROS_KIRO_CLI_PATH",
+    "opencode": "OUROBOROS_OPENCODE_CLI_PATH",
+    "pi": "OUROBOROS_PI_CLI_PATH",
+    "zcode": "OUROBOROS_ZCODE_CLI_PATH",
+}
+
 
 def _load_config() -> tuple[dict, Path]:
     """Load config.yaml and return (dict, path).
@@ -138,9 +153,22 @@ def _save_config(data: dict, path: Path) -> None:
 
 
 def _resolve_cli_path(data: dict) -> str | None:
-    """Return the active CLI path based on the current runtime backend."""
-    backend = data.get("orchestrator", {}).get("runtime_backend", "claude")
-    capability = get_backend_capability(str(backend))
+    """Return the effective CLI path based on env-aware runtime selection."""
+    from ouroboros.config_tui.fields import GLOBAL_RUNTIME_FIELD, get_value
+
+    backend, _source = _effective_value(
+        GLOBAL_RUNTIME_FIELD.env_vars,
+        get_value(data, GLOBAL_RUNTIME_FIELD.key),
+        "claude",
+    )
+    resolved_backend = _normalize_runtime_backend_for_display(backend)
+    env_var = _CLI_PATH_ENV_BY_BACKEND.get(resolved_backend)
+    if env_var:
+        env_path = os.environ.get(env_var, "").strip()
+        if env_path:
+            return env_path
+
+    capability = get_backend_capability(resolved_backend)
     if capability is not None and capability.cli_config_key:
         return data.get("orchestrator", {}).get(capability.cli_config_key)
     return None
@@ -249,6 +277,41 @@ def _display_stage_model(model: str, source: str, runtime_backend: str) -> tuple
     )
 
 
+def _stage_model_default_for_runtime(stage: object, runtime_backend: str) -> str | None:
+    """Resolve shipped stage defaults the same way runtime model loaders do."""
+    from ouroboros.backends.model_catalog import DEFAULT_MODEL_SENTINEL, uses_default_model_sentinel
+    from ouroboros.orchestrator_stage import Stage
+
+    if not uses_default_model_sentinel(runtime_backend):
+        return None
+
+    # These persisted fields ship with Claude Opus defaults. For Codex and the
+    # other CLI-owned-model backends, the loader maps untouched shipped defaults
+    # to the backend-owned "default" sentinel before execution.
+    if stage in {Stage.INTERVIEW, Stage.EVALUATE, Stage.REFLECT}:
+        return DEFAULT_MODEL_SENTINEL
+
+    return None
+
+
+def _normalize_stage_model_for_display(
+    stage: object,
+    model: str,
+    source: str,
+    runtime_backend: str,
+) -> tuple[str, str]:
+    """Render the model value that runtime loading would actually use."""
+    from ouroboros.config._model_defaults import DEFAULT_OPUS_MODEL, recognized_shipped_defaults
+
+    normalized_model = model
+    normalized_source = source
+    runtime_default = _stage_model_default_for_runtime(stage, runtime_backend)
+    if runtime_default is not None and model in recognized_shipped_defaults(DEFAULT_OPUS_MODEL):
+        normalized_model = runtime_default
+        normalized_source = f"{source} → backend default"
+    return _display_stage_model(normalized_model, normalized_source, runtime_backend)
+
+
 def _effective_view_data(data: dict, config_path: Path) -> dict:
     """Machine-readable effective view (what `show --json` emits)."""
     from ouroboros.backends.model_catalog import installed_backends
@@ -287,7 +350,9 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
                 "backend default",
                 empty_env_overrides=model_field.empty_env_overrides,
             )
-            model_value, model_source = _display_stage_model(model_value, model_source, resolved)
+            model_value, model_source = _normalize_stage_model_for_display(
+                stage, model_value, model_source, resolved
+            )
             model_key = model_field.key
         stages[stage.value] = {
             "agent": resolved,
@@ -376,7 +441,9 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
                 "backend default",
                 empty_env_overrides=model_field.empty_env_overrides,
             )
-            model_value, model_source = _display_stage_model(model_value, model_source, resolved)
+            model_value, model_source = _normalize_stage_model_for_display(
+                stage, model_value, model_source, resolved
+            )
         stages_table.add_row(stage.value, agent_cell, model_value, model_source)
     print_table(stages_table)
 

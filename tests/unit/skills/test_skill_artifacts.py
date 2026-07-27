@@ -183,6 +183,35 @@ def test_codex_setup_gate_accepts_yaml_flow_mappings(tmp_path: Path) -> None:
     assert _run_setup_gate(gate, home=tmp_path, codex_home=codex_home) == "CODEX_READY"
 
 
+def test_codex_completed_welcome_precheck_accepts_yaml_flow_mappings(
+    tmp_path: Path,
+) -> None:
+    """The completed-welcome shortcut must use the same YAML shape as the setup gate."""
+    repo_root = Path(__file__).resolve().parents[3]
+    codex_home = tmp_path / "alternate-codex-home"
+    config_path = tmp_path / ".ouroboros" / "config.yaml"
+    config_path.parent.mkdir()
+    (tmp_path / ".ouroboros" / "prefs.json").write_text(
+        '{"welcomeCompleted": "2026-07-27"}\n',
+        encoding="utf-8",
+    )
+    codex_home.mkdir()
+    config_path.write_text(
+        "orchestrator: {runtime_backend: codex}\nllm: {backend: codex}\n",
+        encoding="utf-8",
+    )
+    (codex_home / "config.toml").write_text(
+        '[mcp_servers.ouroboros]\ncommand = "ouroboros"\n',
+        encoding="utf-8",
+    )
+    skill = (repo_root / "skills" / "welcome" / "SKILL.md").read_text(encoding="utf-8")
+    precheck_context = skill.index("Before honoring that completion marker")
+    start = skill.index("CODEX_HOME_DIR=", precheck_context)
+    precheck = skill[start : skill.index("\n```", start)] + '\nprintf "$CODEX_READY"\n'
+
+    assert _run_setup_gate(precheck, home=tmp_path, codex_home=codex_home) == "true"
+
+
 def test_codex_setup_gate_rejects_empty_mcp_server_mapping(tmp_path: Path) -> None:
     """The gate must not bypass setup for an unusable empty MCP entry."""
     repo_root = Path(__file__).resolve().parents[3]
