@@ -78,7 +78,10 @@ class TestConfigShow:
 
     def test_show_codex_cli_path(self, codex_config_dir: Path) -> None:
         """config show should display codex_cli_path for codex backend."""
-        with patch("ouroboros.config.models.get_config_dir", return_value=codex_config_dir):
+        with (
+            patch("ouroboros.config.models.get_config_dir", return_value=codex_config_dir),
+            patch("ouroboros.cli.commands.setup._detect_runtimes", return_value={"codex": None}),
+        ):
             result = runner.invoke(app, ["show"])
         assert result.exit_code == 0
         assert "/usr/bin/codex" in result.output

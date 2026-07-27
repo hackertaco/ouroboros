@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 from typing import Annotated, get_args, get_origin
 
+from rich.markup import escape
 import typer
 import yaml
 
@@ -175,7 +176,9 @@ def _resolve_cli_path(data: dict) -> str | None:
     if resolved_backend == "codex":
         from ouroboros.cli.commands.setup import _detect_runtimes
 
-        return _detect_runtimes().get("codex")
+        detected_path = _detect_runtimes().get("codex")
+        if detected_path:
+            return detected_path
 
     env_var = _CLI_PATH_ENV_BY_BACKEND.get(resolved_backend)
     if env_var:
@@ -585,7 +588,10 @@ def backend(
         console.print(f"\n[bold]Current backend:[/bold] [cyan]{current}[/cyan]")
         cli_path = _resolve_cli_path(data)
         if cli_path:
-            console.print(f"[bold]CLI path:[/bold]        [dim]{cli_path}[/dim]")
+            console.print(
+                f"[bold]CLI path:[/bold]        [dim]{escape(cli_path)}[/dim]",
+                highlight=False,
+            )
         console.print(
             "\n[dim]Switch with: ouroboros config backend "
             "<claude|codex|hermes|gemini|gjc|goose|pi|antigravity|grok|zcode>[/dim]\n"
