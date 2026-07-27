@@ -8,7 +8,7 @@ from ouroboros.orchestrator_stage import VALID_STAGE_KEYS, Stage
 
 def test_stage_model_fields_cover_configurable_stage_models_only() -> None:
     assert {stage.value for stage in fields.STAGE_MODEL_FIELDS} <= VALID_STAGE_KEYS
-    assert Stage.EXECUTE not in fields.STAGE_MODEL_FIELDS
+    assert fields.STAGE_MODEL_FIELDS[Stage.EXECUTE].key == "execution.default_model"
 
 
 def test_stage_runtime_field_targets_runtime_profile() -> None:

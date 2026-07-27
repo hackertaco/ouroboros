@@ -1552,9 +1552,11 @@ def _restore_directory_snapshot(path: Path, snapshot: dict[Path, bytes]) -> None
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
     from ouroboros.config.loader import ensure_config_dir, get_default_config
+    from ouroboros.config.models import get_default_credentials
 
     config_dir = ensure_config_dir()
     config_path = config_dir / "config.yaml"
+    credentials_path = config_dir / "credentials.yaml"
     fresh_config = not config_path.exists()
 
     if not fresh_config:
@@ -1594,6 +1596,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     codex_home_snapshot = _snapshot_directory(codex_home)
     codex_config_snapshot = _snapshot_file(codex_config_path)
     config_snapshot = _snapshot_file(config_path)
+    credentials_snapshot = _snapshot_file(credentials_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
@@ -1610,9 +1613,18 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         _atomic_write_text(
             config_path, yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
         )
+        if fresh_config and not credentials_path.exists():
+            credentials_dict = get_default_credentials().model_dump(mode="json")
+            _atomic_write_text(
+                credentials_path,
+                yaml.dump(credentials_dict, default_flow_style=False, sort_keys=False),
+            )
+            credentials_path.chmod(0o600)
     except OSError as exc:
         _restore_directory_snapshot(codex_home, codex_home_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
+        _restore_file_snapshot(config_path, config_snapshot)
+        _restore_file_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not save Codex runtime config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
         return False
@@ -1647,6 +1659,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         _restore_directory_snapshot(codex_home, codex_home_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
+        _restore_file_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not finish Codex setup: {exc}")
         print_info("Restored Codex and Ouroboros config; setup incomplete.")
         return False

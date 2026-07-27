@@ -292,7 +292,11 @@ async def test_explicit_stage_agent_not_affected_by_global_change(app_env) -> No
         await pilot.pause()
 
         assert "codex" in str(caption.render())
-        assert not list(pilot.app.query(f"#stage-model-{stage}").results(Select))
+        model_select = pilot.app.query_one(f"#stage-model-{stage}", Select)
+        assert model_select.value == "default"
+        values = {value for _, value in model_select._options}
+        assert "gpt-5" in values
+        assert "claude-opus-4-8" not in values  # stale global catalog was not applied
 
 
 @pytest.mark.asyncio
@@ -426,8 +430,9 @@ async def test_preset_button_stages_models_for_every_card(app_env) -> None:
         await pilot.click("#preset-frugal")
         await pilot.pause()
         interview_model = pilot.app.query_one(f"#stage-model-{Stage.INTERVIEW.value}", Select)
+        execute_model = pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select)
         assert interview_model.value == "claude-haiku-4-5-20251001"  # claude frugal
-        assert not list(pilot.app.query(f"#stage-model-{Stage.EXECUTE.value}").results(Select))
+        assert execute_model.value == "gpt-5-mini"  # execute fixture runs on codex
         status = pilot.app.query_one("#status-bar", Static)
         assert "frugal" in str(status.render())
         assert "Save" in str(status.render())  # staged, not saved

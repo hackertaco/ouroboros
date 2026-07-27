@@ -228,6 +228,27 @@ def test_explicit_pi_installs_base_and_runs_pi_setup(tmp_path: Path) -> None:
     ]
 
 
+def test_explicit_runtime_setup_failure_fails_install(tmp_path: Path) -> None:
+    result = _run_installer(
+        tmp_path,
+        include_uv=False,
+        env={"OUROBOROS_INSTALL_RUNTIME": "pi"},
+        fake_commands={
+            "pipx": "#!/bin/sh\nprintf 'pipx %s\\n' \"$*\" >> __CALLS__\nexit 0\n".replace(
+                "__CALLS__", str(tmp_path / "calls.log")
+            ),
+            "python3.12": '#!/bin/sh\nif [ "$1" = "-c" ]; then echo 3.12; exit 0; fi\necho \'Python 3.12.0\'\n',
+            "pi": "#!/bin/sh\nexit 0\n",
+            "ouroboros": f'#!/bin/sh\nprintf \'ouroboros %s\\n\' "$*" >> {tmp_path / "calls.log"}\nif [ "$1" = "setup" ] && [ "$2" = "--runtime" ]; then exit 42; fi\nexit 0\n',
+        },
+    )
+
+    assert result.returncode == 42
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8")
+    assert "ouroboros setup --runtime pi --non-interactive" in calls
+    assert "ouroboros setup refresh" not in calls
+
+
 def test_explicit_goose_installs_base_and_runs_goose_setup(tmp_path: Path) -> None:
     result = _run_installer(
         tmp_path,

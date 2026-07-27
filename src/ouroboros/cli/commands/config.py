@@ -172,6 +172,11 @@ def _resolve_cli_path(data: dict) -> str | None:
         "claude",
     )
     resolved_backend = _normalize_runtime_backend_for_display(backend)
+    if resolved_backend == "codex":
+        from ouroboros.cli.commands.setup import _detect_runtimes
+
+        return _detect_runtimes().get("codex")
+
     env_var = _CLI_PATH_ENV_BY_BACKEND.get(resolved_backend)
     if env_var:
         env_path = os.environ.get(env_var, "").strip()
@@ -611,6 +616,10 @@ def backend(
         from ouroboros.config import get_gemini_cli_path
 
         cli_path = get_gemini_cli_path()
+    elif new_backend == "codex":
+        from ouroboros.cli.commands.setup import _detect_runtimes
+
+        cli_path = _detect_runtimes().get("codex")
     elif new_backend == "goose":
         from ouroboros.config import get_goose_cli_path
 
@@ -694,10 +703,10 @@ def backend(
     _setup_had_errors = False
     _orig_print_error = setup_mod.print_error
 
-    def _tracking_print_error(msg: str) -> None:
+    def _tracking_print_error(msg: str, *args: object, **kwargs: object) -> None:
         nonlocal _setup_had_errors
         _setup_had_errors = True
-        _orig_print_error(msg)
+        _orig_print_error(msg, *args, **kwargs)
 
     prev_quiet = console.quiet
     setup_failed = False
@@ -707,7 +716,8 @@ def backend(
         if new_backend == "claude":
             _setup_claude(cli_path)
         elif new_backend == "codex":
-            _setup_codex(cli_path)
+            if _setup_codex(cli_path) is False:
+                setup_failed = True
         elif new_backend == "hermes":
             _setup_hermes(cli_path)
         elif new_backend == "gemini":
@@ -734,7 +744,9 @@ def backend(
         setup_mod.print_error = _orig_print_error  # type: ignore[assignment]
 
     if setup_failed:
-        pass  # Already warned above
+        print_error(f"Could not switch backend to {new_backend}; setup did not complete.")
+        print_info("Existing configuration was left unchanged or restored.")
+        raise typer.Exit(1)
     elif _setup_had_errors:
         print_warning("Backend switched but some setup steps had issues.")
         print_info("Run [bold]ouroboros setup[/] to verify configuration.")

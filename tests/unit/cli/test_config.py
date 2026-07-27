@@ -160,6 +160,21 @@ class TestConfigBackend:
         assert result.exit_code == 0
         assert "claude" in result.output
 
+    def test_show_current_codex_backend_uses_canonical_detection(
+        self, codex_config_dir: Path
+    ) -> None:
+        with (
+            patch("ouroboros.config.models.get_config_dir", return_value=codex_config_dir),
+            patch(
+                "ouroboros.cli.commands.setup._detect_runtimes",
+                return_value={"codex": "/resolved/codex"},
+            ),
+        ):
+            result = runner.invoke(app, ["backend"])
+
+        assert result.exit_code == 0
+        assert "/resolved/codex" in result.output
+
     def test_switch_to_same_backend(self, config_dir: Path) -> None:
         with patch("ouroboros.config.models.get_config_dir", return_value=config_dir):
             result = runner.invoke(app, ["backend", "claude"])
@@ -183,6 +198,7 @@ class TestConfigBackend:
         with (
             patch("ouroboros.config.models.get_config_dir", return_value=config_dir),
             patch("shutil.which", return_value=None),
+            patch("ouroboros.cli.commands.setup._detect_runtimes", return_value={"codex": None}),
         ):
             result = runner.invoke(app, ["backend", "codex"])
         assert result.exit_code == 1
@@ -198,6 +214,34 @@ class TestConfigBackend:
             result = runner.invoke(app, ["backend", "codex"])
         assert result.exit_code == 0
         mock_setup.assert_called_once_with("/usr/bin/codex")
+
+    def test_switch_to_codex_uses_canonical_detection(self, config_dir: Path) -> None:
+        """config backend codex must honor env/config/App detection, not only PATH."""
+        with (
+            patch("ouroboros.config.models.get_config_dir", return_value=config_dir),
+            patch("shutil.which", return_value=None),
+            patch(
+                "ouroboros.cli.commands.setup._detect_runtimes",
+                return_value={"codex": "/opt/codex/bin/codex"},
+            ),
+            patch("ouroboros.cli.commands.setup._setup_codex", return_value=True) as mock_setup,
+        ):
+            result = runner.invoke(app, ["backend", "codex"])
+
+        assert result.exit_code == 0, result.output
+        mock_setup.assert_called_once_with("/opt/codex/bin/codex")
+
+    def test_switch_to_codex_fails_when_setup_returns_false(self, config_dir: Path) -> None:
+        """config backend codex must not report success when setup rolls back."""
+        with (
+            patch("ouroboros.config.models.get_config_dir", return_value=config_dir),
+            patch("shutil.which", return_value="/usr/bin/codex"),
+            patch("ouroboros.cli.commands.setup._setup_codex", return_value=False),
+        ):
+            result = runner.invoke(app, ["backend", "codex"])
+
+        assert result.exit_code == 1
+        assert "Could not switch backend to codex" in result.output
 
     def test_switch_to_claude_delegates_to_setup(self, codex_config_dir: Path) -> None:
         """config backend claude should delegate to _setup_claude."""

@@ -1079,6 +1079,55 @@ class TestCodexSetup:
         assert any("Configure Ouroboros runtime" in message for message in info_messages)
         assert any("profiles you manage yourself" in message for message in info_messages)
 
+    def test_setup_codex_fresh_setup_creates_secure_credentials(self, tmp_path: Path) -> None:
+        """Fresh Codex setup must leave config_exists() true by creating credentials.yaml."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        credentials_path = config_dir / "credentials.yaml"
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts", return_value=True),
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles"),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                return_value=True,
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is True
+
+        assert (config_dir / "config.yaml").exists()
+        assert credentials_path.exists()
+        assert credentials_path.stat().st_mode & 0o777 == 0o600
+
+    def test_setup_codex_rolls_back_fresh_config_when_credentials_write_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Fresh setup must not leave config.yaml without credentials.yaml."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        credentials_path = config_dir / "credentials.yaml"
+
+        def _write(path: Path, text: str) -> None:
+            if path == credentials_path:
+                raise OSError("credentials disk full")
+            path.write_text(text, encoding="utf-8")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch("ouroboros.cli.commands.setup._atomic_write_text", side_effect=_write),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts") as mock_install,
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert not (config_dir / "config.yaml").exists()
+        assert not credentials_path.exists()
+        mock_install.assert_not_called()
+
     def test_setup_codex_does_not_save_config_when_mcp_registration_fails(
         self,
         tmp_path: Path,

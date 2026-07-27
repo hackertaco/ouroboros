@@ -587,7 +587,7 @@ fi
 _step "4/4  Wiring local integrations" "Creates config and runtime-specific files when a backend was selected."
 if [ -n "$RUNTIME" ] && [ -n "$OUROBOROS_SETUP_CMD" ]; then
   _info "Running: $OUROBOROS_SETUP_CMD setup --runtime $RUNTIME --non-interactive"
-  "$OUROBOROS_SETUP_CMD" setup --runtime "$RUNTIME" --non-interactive || true
+  "$OUROBOROS_SETUP_CMD" setup --runtime "$RUNTIME" --non-interactive
 elif [ -n "$RUNTIME" ]; then
   _warn "ouroboros command is not on PATH yet; run setup after your shell sees the installed binary."
 else
