@@ -1184,6 +1184,67 @@ class TestCodexSetup:
         mock_retire.assert_not_called()
         mock_worker_profile.assert_not_called()
 
+    def test_setup_codex_rolls_back_when_artifact_install_fails(self, tmp_path: Path) -> None:
+        """Missing packaged Codex artifacts must fail setup instead of reporting success."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original_config = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original_config, encoding="utf-8")
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        original_toml = '[mcp_servers.ouroboros]\ncommand = "old"\n'
+        codex_config.write_text(original_toml, encoding="utf-8")
+
+        def _register(**_kwargs: object) -> bool:
+            codex_config.write_text('[mcp_servers.ouroboros]\ncommand = "new"\n', encoding="utf-8")
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", side_effect=_register),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts", return_value=False),
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles") as mock_retire,
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile"
+            ) as mock_worker_profile,
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.read_text(encoding="utf-8") == original_config
+        assert codex_config.read_text(encoding="utf-8") == original_toml
+        mock_retire.assert_not_called()
+        mock_worker_profile.assert_not_called()
+
+    def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Retiring legacy profile anchors must not truncate config.toml silently."""
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        codex_config.write_text(
+            '[profiles.ouroboros-fast]\nmodel_reasoning_effort = "low"\n',
+            encoding="utf-8",
+        )
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "ouroboros.cli.commands.setup._atomic_write_text",
+                side_effect=OSError("disk full"),
+            ) as mock_atomic,
+        ):
+            with pytest.raises(OSError, match="disk full"):
+                setup_cmd._retire_codex_default_profiles()
+
+        mock_atomic.assert_called_once()
+        assert codex_config.read_text(encoding="utf-8") == (
+            '[profiles.ouroboros-fast]\nmodel_reasoning_effort = "low"\n'
+        )
+
     def test_setup_cli_codex_failure_exits_before_success_banner(self) -> None:
         """Top-level setup must propagate Codex setup failure to exit status."""
         runner = CliRunner()

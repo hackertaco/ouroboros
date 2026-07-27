@@ -1040,10 +1040,10 @@ def _retire_codex_default_profiles(*, protected_profile_names: set[str] | None =
             }
             if removable:
                 updated_raw, _ = _remove_codex_legacy_profile_sections(raw, removable)
-                codex_config.write_text(updated_raw, encoding="utf-8")
+                _atomic_write_text(codex_config, updated_raw)
                 removed.extend(sorted(removable))
-        except (OSError, tomllib.TOMLDecodeError, ValueError):
-            pass
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"Could not parse {codex_config}: {exc}") from exc
 
     for name, settings in _CODEX_DEFAULT_PROFILE_SECTIONS.items():
         if name in protected:
@@ -1195,7 +1195,7 @@ def _register_codex_default_profiles(*, codex_path: str | None = None) -> None:
         }
         added_profiles = _write_codex_profile_v2_files(codex_config.parent, profile_settings)
         if updated_raw != raw:
-            codex_config.write_text(updated_raw, encoding="utf-8")
+            _atomic_write_text(codex_config, updated_raw)
         _warn_preserved_legacy_codex_profiles(codex_config, preserved_legacy_profiles)
 
         if added_profiles:
@@ -1220,7 +1220,7 @@ def _register_codex_default_profiles(*, codex_path: str | None = None) -> None:
         print_info("Codex Ouroboros task profiles already present.")
         return
 
-    codex_config.write_text(updated_raw, encoding="utf-8")
+    _atomic_write_text(codex_config, updated_raw)
     print_success(f"Registered Codex task profiles in {codex_config}: {', '.join(added_profiles)}")
 
 
@@ -1273,7 +1273,7 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
             )
             created_profile = True
         if updated_raw != raw:
-            codex_config.write_text(updated_raw, encoding="utf-8")
+            _atomic_write_text(codex_config, updated_raw)
             _warn_preserved_legacy_codex_profiles(codex_config, preserved_legacy_profiles)
             print_success(f"Migrated legacy Codex worker profile out of {codex_config}")
         elif created_profile:
@@ -1297,7 +1297,7 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
         print_info("Codex worker profile already up to date.")
         return
 
-    codex_config.write_text(updated_raw, encoding="utf-8")
+    _atomic_write_text(codex_config, updated_raw)
     if existed_before:
         print_success(f"Updated Codex worker profile in {codex_config}")
     else:
@@ -1483,7 +1483,7 @@ def _print_codex_config_guidance(config_path: Path) -> None:
     )
 
 
-def _install_codex_artifacts() -> None:
+def _install_codex_artifacts() -> bool:
     """Install packaged Ouroboros rules and skills into ~/.codex/."""
     from ouroboros.codex import install_codex_artifacts
 
@@ -1493,8 +1493,10 @@ def _install_codex_artifacts() -> None:
         result = install_codex_artifacts(codex_dir=codex_dir, prune=True)
         print_success(f"Installed Codex rules → {result.rules_path}")
         print_success(f"Installed {len(result.skill_paths)} Codex skills → {codex_dir / 'skills'}")
-    except FileNotFoundError:
-        print_error("Could not locate packaged Codex rules or skills.")
+        return True
+    except (FileNotFoundError, OSError) as exc:
+        print_error(f"Could not install packaged Codex rules or skills: {exc}")
+        return False
 
 
 def _snapshot_file(path: Path) -> bytes | None:
@@ -1519,7 +1521,7 @@ def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
 
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
-    from ouroboros.config.loader import create_default_config, ensure_config_dir, get_default_config
+    from ouroboros.config.loader import ensure_config_dir, get_default_config
 
     config_dir = ensure_config_dir()
     config_path = config_dir / "config.yaml"
@@ -1559,6 +1561,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # setup in a false-success state.
     codex_config_path = resolve_codex_home() / "config.toml"
     codex_config_snapshot = _snapshot_file(codex_config_path)
+    config_snapshot = _snapshot_file(config_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
@@ -1571,8 +1574,6 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         return False
 
     try:
-        if fresh_config:
-            create_default_config(config_dir)
         _atomic_write_text(
             config_path, yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
         )
@@ -1601,11 +1602,18 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             f"Installed Ouroboros role profile defaults for {len(added_role_profiles)} roles."
         )
 
-    # Install Codex-native rules and skills into ~/.codex/
-    _install_codex_artifacts()
-
-    _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
-    _register_codex_worker_profile(codex_path=codex_path)
+    try:
+        # Install Codex-native rules and skills into the active Codex home.
+        if not _install_codex_artifacts():
+            raise OSError("Codex artifact installation failed")
+        _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
+        _register_codex_worker_profile(codex_path=codex_path)
+    except (OSError, ValueError) as exc:
+        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
+        _restore_file_snapshot(config_path, config_snapshot)
+        print_error(f"Could not finish Codex setup: {exc}")
+        print_info("Restored Codex and Ouroboros config; setup incomplete.")
+        return False
     _print_codex_config_guidance(config_path)
     return True
 
