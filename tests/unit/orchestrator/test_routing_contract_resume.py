@@ -2172,6 +2172,9 @@ def test_mcp_model_tier_omission_remains_distinguishable_from_explicit_medium() 
     # automatic Codex selection / restore a checkpoint) from explicitly supplied
     # ``medium`` (pin standard routing).
     assert parameter.default is None
+    assert "Default: medium" not in parameter.description
+    assert "Omit to preserve automatic runtime selection" in parameter.description
+    assert "pass medium explicitly" in parameter.description
 
     assert _resolve_model_tier_request({}) == (None, None, None)
     assert _resolve_model_tier_request({"model_tier": None}) == (

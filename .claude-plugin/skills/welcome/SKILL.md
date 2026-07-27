@@ -111,8 +111,14 @@ ready = (
     and llm.get("backend") == "claude"
     and isinstance(ouroboros_mcp, dict)
     and (
-        isinstance(ouroboros_mcp.get("command"), str)
-        or isinstance(ouroboros_mcp.get("url"), str)
+        (
+            isinstance(ouroboros_mcp.get("command"), str)
+            and bool(ouroboros_mcp.get("command", "").strip())
+        )
+        or (
+            isinstance(ouroboros_mcp.get("url"), str)
+            and bool(ouroboros_mcp.get("url", "").strip())
+        )
     )
 )
 raise SystemExit(0 if ready else 1)
@@ -230,8 +236,14 @@ ready = (
     and llm.get("backend") == "claude"
     and isinstance(ouroboros_mcp, dict)
     and (
-        isinstance(ouroboros_mcp.get("command"), str)
-        or isinstance(ouroboros_mcp.get("url"), str)
+        (
+            isinstance(ouroboros_mcp.get("command"), str)
+            and bool(ouroboros_mcp.get("command", "").strip())
+        )
+        or (
+            isinstance(ouroboros_mcp.get("url"), str)
+            and bool(ouroboros_mcp.get("url", "").strip())
+        )
     )
 )
 raise SystemExit(0 if ready else 1)

@@ -69,6 +69,7 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 if python3 - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -108,6 +109,17 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
     """Read MCP server table membership when the host lacks ``tomllib``."""
     servers: dict[str, dict[str, object]] = {}
     table: list[str] = []
+
+    def scalar_value(raw: str) -> str:
+        value = raw.strip().split(" #", 1)[0].strip().rstrip(",}").strip()
+        return value.strip("'\"").strip()
+
+    def inline_value(raw: str, key: str) -> str | None:
+        match = re.search(rf"\b{re.escape(key)}\s*=\s*(\"[^\"]*\"|'[^']*'|[^,}}]+)", raw)
+        if match is None:
+            return None
+        return scalar_value(match.group(1))
+
     for raw_line in source.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -120,15 +132,16 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
         if table == ["mcp_servers"] and "=" in line:
             key, raw_value = line.split("=", 1)
             server = servers.setdefault(key.strip().strip("'\""), {})
-            if "command" in raw_value:
-                server["command"] = "present"
-            if "url" in raw_value:
-                server["url"] = "present"
+            for field in ("command", "url"):
+                value = inline_value(raw_value, field)
+                if value is not None:
+                    server[field] = value
             continue
         if len(table) >= 2 and table[0] == "mcp_servers" and "=" in line:
-            key = line.split("=", 1)[0].strip().strip("'\"")
+            key, raw_value = line.split("=", 1)
+            key = key.strip().strip("'\"")
             if key in {"command", "url"}:
-                servers.setdefault(table[1], {})[key] = "present"
+                servers.setdefault(table[1], {})[key] = scalar_value(raw_value)
     return servers
 
 try:
@@ -152,8 +165,14 @@ ready = (
     and llm.get("backend") == "codex"
     and isinstance(ouroboros_mcp, dict)
     and (
-        isinstance(ouroboros_mcp.get("command"), str)
-        or isinstance(ouroboros_mcp.get("url"), str)
+        (
+            isinstance(ouroboros_mcp.get("command"), str)
+            and bool(ouroboros_mcp.get("command", "").strip())
+        )
+        or (
+            isinstance(ouroboros_mcp.get("url"), str)
+            and bool(ouroboros_mcp.get("url", "").strip())
+        )
     )
 )
 raise SystemExit(0 if ready else 1)
@@ -356,6 +375,7 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 if python3 - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -390,6 +410,17 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
     """Read MCP table membership when the host lacks the TOML standard library."""
     servers: dict[str, dict[str, object]] = {}
     table: list[str] = []
+
+    def scalar_value(raw: str) -> str:
+        value = raw.strip().split(" #", 1)[0].strip().rstrip(",}").strip()
+        return value.strip("'\"").strip()
+
+    def inline_value(raw: str, key: str) -> str | None:
+        match = re.search(rf"\b{re.escape(key)}\s*=\s*(\"[^\"]*\"|'[^']*'|[^,}}]+)", raw)
+        if match is None:
+            return None
+        return scalar_value(match.group(1))
+
     for raw_line in source.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -402,15 +433,16 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
         if table == ["mcp_servers"] and "=" in line:
             key, raw_value = line.split("=", 1)
             server = servers.setdefault(key.strip().strip("'\""), {})
-            if "command" in raw_value:
-                server["command"] = "present"
-            if "url" in raw_value:
-                server["url"] = "present"
+            for field in ("command", "url"):
+                value = inline_value(raw_value, field)
+                if value is not None:
+                    server[field] = value
             continue
         if len(table) >= 2 and table[0] == "mcp_servers" and "=" in line:
-            key = line.split("=", 1)[0].strip().strip("'\"")
+            key, raw_value = line.split("=", 1)
+            key = key.strip().strip("'\"")
             if key in {"command", "url"}:
-                servers.setdefault(table[1], {})[key] = "present"
+                servers.setdefault(table[1], {})[key] = scalar_value(raw_value)
     return servers
 
 try:
@@ -435,8 +467,14 @@ ready = (
     and llm.get("backend") == "codex"
     and isinstance(ouroboros_mcp, dict)
     and (
-        isinstance(ouroboros_mcp.get("command"), str)
-        or isinstance(ouroboros_mcp.get("url"), str)
+        (
+            isinstance(ouroboros_mcp.get("command"), str)
+            and bool(ouroboros_mcp.get("command", "").strip())
+        )
+        or (
+            isinstance(ouroboros_mcp.get("url"), str)
+            and bool(ouroboros_mcp.get("url", "").strip())
+        )
     )
 )
 raise SystemExit(0 if ready else 1)

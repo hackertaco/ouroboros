@@ -1194,7 +1194,8 @@ class ExecuteSeedHandler(BridgeAwareMixin):
                     description=(
                         "Model-tier routing: small/medium/large → frugal/standard/frontier "
                         "execution tier (trusted decomposed children may run one tier below; "
-                        "retries escalate). Default: medium"
+                        "retries escalate). Omit to preserve automatic runtime selection; "
+                        "pass medium explicitly to pin standard routing."
                     ),
                     required=False,
                     enum=("small", "medium", "large"),
