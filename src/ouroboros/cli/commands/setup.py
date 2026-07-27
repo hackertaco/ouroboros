@@ -202,7 +202,7 @@ def _detect_runtimes() -> dict[str, str | None]:
         except Exception:
             codex_path = None
         if codex_path:
-            configured = Path(codex_path)
+            configured = Path(codex_path).expanduser()
             if configured.is_file() and os.access(configured, os.X_OK):
                 runtimes["codex"] = str(configured)
 
@@ -838,13 +838,13 @@ def _register_codex_mcp_server(*, mode: CodexMcpMode = "auto") -> bool:
             print_info("Codex MCP server already up to date.")
             return True
 
-        codex_config.write_text(updated_raw, encoding="utf-8")
+        _atomic_write_text(codex_config, updated_raw)
         if existed_before:
             print_success(f"Updated Ouroboros MCP server in {codex_config}")
         else:
             print_success(f"Registered Ouroboros MCP server in {codex_config}")
     else:
-        codex_config.write_text(_render_codex_mcp_section().lstrip("\n"), encoding="utf-8")
+        _atomic_write_text(codex_config, _render_codex_mcp_section().lstrip("\n"))
         print_success(f"Registered Ouroboros MCP server in {codex_config}")
     return True
 
@@ -1559,7 +1559,14 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # setup in a false-success state.
     codex_config_path = resolve_codex_home() / "config.toml"
     codex_config_snapshot = _snapshot_file(codex_config_path)
-    if not _register_codex_mcp_server(mode=mcp_mode):
+    try:
+        mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
+    except OSError as exc:
+        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
+        print_error(f"Could not save Codex MCP config: {exc}")
+        print_info("Restored Codex MCP config; setup incomplete.")
+        return False
+    if not mcp_registered:
         print_info("Aborting Codex setup without rewriting config.yaml.")
         return False
 
@@ -3502,7 +3509,14 @@ def setup(
     elif selected in ("codex", "codex_cli"):
         codex_path = available.get("codex")
         if not codex_path:
-            print_error("Codex CLI not found in PATH.")
+            env_codex_path = os.environ.get("OUROBOROS_CODEX_CLI_PATH", "").strip()
+            if env_codex_path:
+                print_error(
+                    "Configured Codex CLI override is not executable: "
+                    f"OUROBOROS_CODEX_CLI_PATH={env_codex_path}"
+                )
+            else:
+                print_error("Codex CLI not found in PATH or Codex App bundle.")
             raise typer.Exit(1)
         if not _setup_codex(codex_path, mcp_mode=_normalize_codex_mcp_mode(mcp_mode)):
             raise typer.Exit(1)

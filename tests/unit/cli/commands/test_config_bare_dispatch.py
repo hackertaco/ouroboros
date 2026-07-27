@@ -233,6 +233,25 @@ def test_show_json_normalizes_runtime_env_backend(monkeypatch, tmp_path) -> None
     assert payload["stages"]["interview"]["agent_installed"] is True
 
 
+def test_show_json_preserves_env_stage_model_pin_for_codex(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(monkeypatch, tmp_path, {"orchestrator": {"runtime_backend": "codex"}})
+    monkeypatch.setenv("OUROBOROS_CLARIFICATION_MODEL", "claude-opus-4-8")
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["stages"]["interview"]["model"] == "claude-opus-4-8"
+    assert payload["stages"]["interview"]["model_source"] == "env OUROBOROS_CLARIFICATION_MODEL ⚠"
+
+
 def test_show_json_uses_runtime_env_as_llm_backend_fallback(monkeypatch, tmp_path) -> None:
     import json
 

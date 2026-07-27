@@ -30,16 +30,12 @@ class SettingField:
         label: Friendly UI label.
         env_vars: Environment variables whose presence overrides the
             effective value of this key at load time.
-        empty_env_overrides: Whether a present-but-empty environment variable
-            deliberately clears the saved value. Most settings treat an empty
-            variable as absent; Execute's model pin is the exception.
         stage: Stage name when the field belongs to a stage card.
     """
 
     key: str
     label: str
     env_vars: tuple[str, ...] = ()
-    empty_env_overrides: bool = False
     stage: str | None = None
 
 
@@ -66,20 +62,15 @@ def stage_runtime_field(stage: Stage) -> SettingField:
 
 
 # Friendly per-stage model bindings. "seed" is not a separate stage: it
-# shares clarification config with interview (see Stage docstring).
+# shares clarification config with interview (see Stage docstring). Execute is
+# runtime-only here: the old execution model key was removed from the config
+# schema, and no replacement execution model contract exists.
 STAGE_MODEL_FIELDS: dict[Stage, SettingField] = {
     Stage.INTERVIEW: SettingField(
         key="clarification.default_model",
         label="Interview & Seed model",
         env_vars=("OUROBOROS_CLARIFICATION_MODEL",),
         stage=Stage.INTERVIEW.value,
-    ),
-    Stage.EXECUTE: SettingField(
-        key="execution.default_model",
-        label="Execute model",
-        env_vars=("OUROBOROS_EXECUTION_MODEL",),
-        empty_env_overrides=True,
-        stage=Stage.EXECUTE.value,
     ),
     Stage.EVALUATE: SettingField(
         key="evaluation.semantic_model",
@@ -99,17 +90,8 @@ ADVANCED_MODEL_FIELDS: tuple[SettingField, ...] = ()
 
 
 def active_env_overrides(field: SettingField) -> tuple[str, ...]:
-    """Names of environment variables actively overriding ``field``.
-
-    ``OUROBOROS_EXECUTION_MODEL=`` is intentional: it clears an otherwise
-    persisted Execute-stage pin.  The settings surfaces must show that as an
-    override rather than falsely presenting the saved pin as effective.
-    """
-    return tuple(
-        name
-        for name in field.env_vars
-        if name in os.environ and (field.empty_env_overrides or os.environ.get(name, "").strip())
-    )
+    """Names of this field's override env vars that are currently set (non-empty)."""
+    return tuple(name for name in field.env_vars if os.environ.get(name, "").strip())
 
 
 def get_value(data: dict[str, Any], key: str) -> Any:

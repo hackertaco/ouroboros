@@ -97,8 +97,13 @@ async def _await_sqlite_write_atomically[T](awaitable: Awaitable[T]) -> T:
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
         try:
-            await task
+            task.result()
         except Exception:
             logger.debug(
                 "event_store.sqlite_write.cleanup_after_cancellation_failed",

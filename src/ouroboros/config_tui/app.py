@@ -69,9 +69,9 @@ SEARCH_THRESHOLD = 20
 # One-click model presets: per-backend picks, falling back to the backend's
 # catalog default where no differentiated tier exists (sentinel backends).
 PRESET_MODELS: dict[str, dict[str, str]] = {
-    "frugal": {"claude": "claude-haiku-4-5-20251001", "codex": "gpt-5.6-luna"},
-    "balanced": {"claude": DEFAULT_SONNET_MODEL, "codex": "gpt-5.6-terra"},
-    "frontier": {"claude": DEFAULT_OPUS_MODEL, "codex": "gpt-5.6-sol"},
+    "frugal": {"claude": "claude-haiku-4-5-20251001", "codex": "gpt-5-mini"},
+    "balanced": {"claude": DEFAULT_SONNET_MODEL, "codex": "gpt-5"},
+    "frontier": {"claude": DEFAULT_OPUS_MODEL, "codex": "gpt-5-codex"},
 }
 
 # One-click multi-LLM stage-routing presets: per-stage runtime backend picks
@@ -292,15 +292,6 @@ class SettingsApp(App[None]):
         self._fetch_pending: set[str] = set()
         # Last concrete model per stage, restored when a search is cancelled.
         self._last_model_value: dict[str, str | None] = {}
-        # Backend whose catalog populated each stage model Select.  A refresh
-        # for the *same* backend must retain an arbitrary persisted pin even
-        # when it is absent from the shipped/discovered catalog; changing the
-        # backend is the point at which that pin becomes incompatible.
-        self._stage_model_backends: dict[Stage, str] = {}
-        # Effective model values rendered from active environment overrides.
-        # They are display state, not user edits: an unrelated Save must never
-        # copy a temporary override into config.yaml.
-        self._env_display_models: dict[Stage, str] = {}
         # What the "default" sentinel resolves to per backend (config-file
         # hint, e.g. hermes → gpt-5.5). Cached: file reads once per backend.
         self._default_hints: dict[str, str | None] = {}
@@ -320,21 +311,6 @@ class SettingsApp(App[None]):
         if value is None:
             value = get_value(self._defaults, key)
         return value
-
-    @staticmethod
-    def _env_model_override(field: SettingField) -> str | None:
-        """Return an active model override, preserving Execute's empty clear.
-
-        ``None`` means no environment value is in effect.  The empty string is
-        meaningful only for Execute, where it deliberately masks a saved pin.
-        """
-        for name in field.env_vars:
-            if name not in os.environ:
-                continue
-            value = os.environ[name].strip()
-            if value or field.empty_env_overrides:
-                return value
-        return None
 
     def _runtime_options(self, *, include_inherit: bool) -> list[tuple[str, str]]:
         # Option labels must stay static: Textual's Select does not re-render
@@ -364,13 +340,7 @@ class SettingsApp(App[None]):
         known.extend(model for model in fetched if model not in known)
         return known
 
-    def _model_options(
-        self,
-        backend: str,
-        current: str | None,
-        *,
-        include_automatic: bool = False,
-    ) -> list[tuple[str, str]]:
+    def _model_options(self, backend: str, current: str | None) -> list[tuple[str, str]]:
         """Select options for a backend.
 
         Small fetched listings merge inline; large ones (e.g. opencode's
@@ -382,38 +352,22 @@ class SettingsApp(App[None]):
             known = self._all_models(backend)
         else:
             known = self._static_models(backend)
-        if include_automatic and DEFAULT_MODEL_SENTINEL not in known:
-            known.insert(0, DEFAULT_MODEL_SENTINEL)
         if current and current not in known:
             known.insert(0, current)
         options = [(self._model_label(backend, model), model) for model in known]
         if len(fetched) > SEARCH_THRESHOLD:
             options.append((f"Search {len(fetched)} models…", SEARCH_SENTINEL))
-        options.append(("Enter another model ID…", CUSTOM_SENTINEL))
+        options.append(("Custom…", CUSTOM_SENTINEL))
         return options
 
     def _model_label(self, backend: str, model: str) -> str:
-        """Describe the runtime-owned default in terms of the model it selects."""
+        """Make the 'default' sentinel concrete: 'default — currently <model>'."""
         if model != DEFAULT_MODEL_SENTINEL:
             return model
-        if _canonical_backend(backend) == "codex":
-            # The Codex App/CLI may select a model independently of the
-            # config file. A config.toml value is only a hint, not evidence
-            # that this invocation will use it.
-            if backend not in self._default_hints:
-                self._default_hints[backend] = configured_default_model(backend)
-            hint = self._default_hints[backend]
-            if hint:
-                return (
-                    "Follow Codex's currently selected model "
-                    f"— config.toml: {hint} (not confirmed at runtime)"
-                )
-            return "Follow Codex's currently selected model — concrete model not reported by Codex"
         if backend not in self._default_hints:
             self._default_hints[backend] = configured_default_model(backend)
         hint = self._default_hints[backend]
-        prefix = "Use runtime default model"
-        return f"{prefix} — configured: {hint}" if hint else prefix
+        return f"default — currently {hint}" if hint else model
 
     def _runtime_env_override(self) -> str | None:
         for name in GLOBAL_RUNTIME_FIELD.env_vars:
@@ -579,22 +533,6 @@ class SettingsApp(App[None]):
         stage_value = get_value(self._raw, runtime_field.key)
         effective_backend = self._effective_stage_backend(stage)
         current_model = str(self._current(model_field.key) or "") if model_field else ""
-        # ``OUROBOROS_EXECUTION_MODEL=`` deliberately clears a saved pin.
-        # Render the effective runtime-owned choice instead of displaying the
-        # dormant persisted value as though it will be used in this session.
-        env_override = self._env_model_override(model_field) if model_field is not None else None
-        if env_override is not None:
-            current_model = env_override
-        # Execute has no shipped model pin: display the implicit behavior as an
-        # explicit default-model choice without persisting anything merely because
-        # the user saves an unrelated setting.
-        if stage is Stage.EXECUTE and not current_model:
-            current_model = DEFAULT_MODEL_SENTINEL
-
-        if model_field is not None:
-            self._stage_model_backends[stage] = effective_backend
-            if env_override is not None:
-                self._env_display_models[stage] = current_model
 
         with Container(classes="stage-card", id=f"stage-card-{stage.value}"):
             yield Static(
@@ -624,25 +562,15 @@ class SettingsApp(App[None]):
                 if warning:
                     yield Static(warning, classes="env-warning")
                 yield Select(
-                    self._model_options(
-                        effective_backend,
-                        current_model,
-                        # Every stage can delegate model selection to its
-                        # currently selected runtime.
-                        include_automatic=True,
-                    ),
+                    self._model_options(effective_backend, current_model),
                     value=current_model if current_model else Select.NULL,
                     allow_blank=True,
                     id=f"stage-model-{stage.value}",
                 )
                 yield Input(
-                    placeholder="e.g. terra",
+                    placeholder="custom model id",
                     classes="hidden",
                     id=f"stage-model-custom-{stage.value}",
-                )
-                yield Static(
-                    "Choose ‘Enter another model ID…’ to pin a model not listed here.",
-                    classes="field-help",
                 )
 
     # ── events ───────────────────────────────────────────────────────
@@ -704,7 +632,7 @@ class SettingsApp(App[None]):
             return
         backend = self._selected_runtime(stage)
         model_select = self.query_one(f"#stage-model-{stage.value}", Select)
-        model_select.set_options(self._model_options(backend, model, include_automatic=True))
+        model_select.set_options(self._model_options(backend, model))
         if model:
             model_select.value = model
 
@@ -749,20 +677,9 @@ class SettingsApp(App[None]):
         model_select = self.query_one(f"#stage-model-{stage.value}", Select)
         current = model_select.value
         current_str = None if _is_blank(current) else str(current)
-        previous_backend = self._stage_model_backends.get(stage)
-        # Keep a non-catalog value while refreshing the same backend.  This is
-        # how a saved pin such as ``terra`` survives reopening the settings UI
-        # before a provider happens to advertise it.  A real agent change still
-        # resets an incompatible pin to the new backend's default.
-        keep = (
-            current_str
-            if current_str
-            and (current_str in self._all_models(backend) or previous_backend == backend)
-            else None
-        )
-        options = self._model_options(backend, keep, include_automatic=True)
+        keep = current_str if current_str and current_str in self._all_models(backend) else None
+        options = self._model_options(backend, keep)
         model_select.set_options(options)
-        self._stage_model_backends[stage] = backend
         concrete = [v for _, v in options if v not in (SEARCH_SENTINEL, CUSTOM_SENTINEL)]
         if keep:
             model_select.value = keep
@@ -880,30 +797,10 @@ class SettingsApp(App[None]):
                         record(model_field.key, custom)
                 elif not _is_blank(model_value):
                     model_text = str(model_value)
-                    # A non-empty environment pin is rendered into the Select
-                    # so people can see what this process will use.  It is not
-                    # a config edit, though: preserve the saved pin whenever
-                    # the user saves an unrelated setting.  (The same guard
-                    # also covers Execute's intentional empty override, whose
-                    # displayed value is the automatic sentinel.)
-                    if self._env_display_models.get(stage) == model_text:
-                        continue
-                    if stage is Stage.EXECUTE and model_text == DEFAULT_MODEL_SENTINEL:
-                        # A blank ``OUROBOROS_EXECUTION_MODEL`` masks the saved
-                        # pin.  Saving an unrelated UI change must not turn
-                        # that temporary effective state into a destructive
-                        # persisted clear.
-                        if model_field.empty_env_overrides and any(
-                            name in os.environ for name in model_field.env_vars
-                        ):
-                            continue
-                        if get_value(self._raw, model_field.key) is not None:
-                            changes[model_field.key] = None
-                        continue
                     if model_text == DEFAULT_MODEL_SENTINEL and not uses_default_model_sentinel(
                         self._selected_runtime(stage)
                     ):
-                        if get_value(self._raw, model_field.key) is not None:
+                        if get_value(self._raw, model_field.key) == DEFAULT_MODEL_SENTINEL:
                             changes[model_field.key] = None
                         continue
                     record(model_field.key, model_text)

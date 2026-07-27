@@ -73,6 +73,24 @@ class TestCodexSetup:
 
         assert detected["codex"] == str(configured)
 
+    def test_detect_runtimes_expands_configured_codex_cli_path(self, tmp_path: Path) -> None:
+        """Setup detection must accept the same ~/ path syntax runtime resolution accepts."""
+        configured = tmp_path / "bin" / "codex-custom"
+        configured.parent.mkdir(parents=True)
+        configured.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        configured.chmod(0o755)
+
+        with (
+            patch.dict(os.environ, {"HOME": str(tmp_path)}),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.cli.commands.setup.shutil.which", return_value=None),
+            patch("ouroboros.config.get_codex_cli_path", return_value="~/bin/codex-custom"),
+            patch("ouroboros.cli.commands.setup._CODEX_APP_CLI_PATH", tmp_path / "app-codex"),
+        ):
+            detected = setup_cmd._detect_runtimes()
+
+        assert detected["codex"] == str(configured)
+
     def test_detect_runtimes_rejects_stale_codex_env_before_path(self, tmp_path: Path) -> None:
         """A stale Codex env path must not be hidden by a valid PATH binary."""
         path_codex = tmp_path / "path" / "codex"
@@ -1112,6 +1130,42 @@ class TestCodexSetup:
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
             patch("ouroboros.cli.commands.setup._register_codex_mcp_server", side_effect=_register),
+            patch(
+                "ouroboros.cli.commands.setup._atomic_write_text",
+                side_effect=OSError("disk full"),
+            ),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts") as mock_install,
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles") as mock_retire,
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile"
+            ) as mock_worker_profile,
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.read_text(encoding="utf-8") == original_config
+        assert codex_config.read_text(encoding="utf-8") == original_toml
+        mock_install.assert_not_called()
+        mock_retire.assert_not_called()
+        mock_worker_profile.assert_not_called()
+
+    def test_setup_codex_rolls_back_mcp_when_registration_write_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed MCP config write must not truncate user Codex config or save runtime."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original_config = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original_config, encoding="utf-8")
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        original_toml = '[mcp_servers.ouroboros]\ncommand = "old"\n'
+        codex_config.write_text(original_toml, encoding="utf-8")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
             patch(
                 "ouroboros.cli.commands.setup._atomic_write_text",
                 side_effect=OSError("disk full"),

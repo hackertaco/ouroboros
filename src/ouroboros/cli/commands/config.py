@@ -5,6 +5,7 @@ Manage configuration settings and provider setup.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
@@ -95,6 +96,15 @@ _CLI_PATH_ENV_BY_BACKEND = {
     "pi": "OUROBOROS_PI_CLI_PATH",
     "zcode": "OUROBOROS_ZCODE_CLI_PATH",
 }
+
+
+@dataclass(frozen=True)
+class _ConfigStageModelField:
+    key: str
+    label: str
+    env_vars: tuple[str, ...] = ()
+    empty_env_overrides: bool = False
+    stage: str | None = None
 
 
 def _load_config() -> tuple[dict, Path]:
@@ -306,10 +316,39 @@ def _normalize_stage_model_for_display(
     normalized_model = model
     normalized_source = source
     runtime_default = _stage_model_default_for_runtime(stage, runtime_backend)
-    if runtime_default is not None and model in recognized_shipped_defaults(DEFAULT_OPUS_MODEL):
+    source_is_env_override = source.startswith("env ")
+    if (
+        runtime_default is not None
+        and not source_is_env_override
+        and model in recognized_shipped_defaults(DEFAULT_OPUS_MODEL)
+    ):
         normalized_model = runtime_default
         normalized_source = f"{source} → backend default"
     return _display_stage_model(normalized_model, normalized_source, runtime_backend)
+
+
+def _config_stage_model_fields() -> dict[object, _ConfigStageModelField]:
+    """Model fields shown by `config show`, including script-only Execute state."""
+    from ouroboros.config_tui.fields import STAGE_MODEL_FIELDS
+    from ouroboros.orchestrator_stage import Stage
+
+    fields = {
+        stage: _ConfigStageModelField(
+            key=field.key,
+            label=field.label,
+            env_vars=field.env_vars,
+            stage=field.stage,
+        )
+        for stage, field in STAGE_MODEL_FIELDS.items()
+    }
+    fields[Stage.EXECUTE] = _ConfigStageModelField(
+        key="execution.default_model",
+        label="Execute model",
+        env_vars=("OUROBOROS_EXECUTION_MODEL",),
+        empty_env_overrides=True,
+        stage=Stage.EXECUTE.value,
+    )
+    return fields
 
 
 def _effective_view_data(data: dict, config_path: Path) -> dict:
@@ -318,12 +357,12 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
     from ouroboros.config_tui.fields import (
         GLOBAL_LLM_BACKEND_FIELD,
         GLOBAL_RUNTIME_FIELD,
-        STAGE_MODEL_FIELDS,
         get_value,
     )
     from ouroboros.orchestrator_stage import Stage
 
     installed = installed_backends()
+    stage_model_fields = _config_stage_model_fields()
     agent_value, agent_source = _effective_value(
         GLOBAL_RUNTIME_FIELD.env_vars,
         get_value(data, GLOBAL_RUNTIME_FIELD.key),
@@ -340,7 +379,7 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
         resolved = _normalize_runtime_backend_for_display(
             stage_agent or profile_default or agent_value
         )
-        model_field = STAGE_MODEL_FIELDS.get(stage)
+        model_field = stage_model_fields.get(stage)
         if model_field is None:
             model_value, model_source, model_key = None, "not configurable", None
         else:
@@ -348,7 +387,7 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
                 model_field.env_vars,
                 get_value(data, model_field.key),
                 "backend default",
-                empty_env_overrides=model_field.empty_env_overrides,
+                empty_env_overrides=getattr(model_field, "empty_env_overrides", False),
             )
             model_value, model_source = _normalize_stage_model_for_display(
                 stage, model_value, model_source, resolved
@@ -393,12 +432,12 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
     from ouroboros.config_tui.fields import (
         GLOBAL_LLM_BACKEND_FIELD,
         GLOBAL_RUNTIME_FIELD,
-        STAGE_MODEL_FIELDS,
         get_value,
     )
     from ouroboros.orchestrator_stage import Stage
 
     installed = installed_backends()
+    stage_model_fields = _config_stage_model_fields()
 
     defaults_table = create_table("Defaults", show_lines=False)
     defaults_table.add_column("Setting", style="cyan")
@@ -431,7 +470,7 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
             agent_cell = _agent_cell(str(stage_agent), installed)
         else:
             agent_cell = f"(inherit) → {_agent_cell(resolved, installed)}"
-        model_field = STAGE_MODEL_FIELDS.get(stage)
+        model_field = stage_model_fields.get(stage)
         if model_field is None:
             model_value, model_source = "n/a", "not configurable"
         else:
@@ -439,7 +478,7 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
                 model_field.env_vars,
                 get_value(data, model_field.key),
                 "backend default",
-                empty_env_overrides=model_field.empty_env_overrides,
+                empty_env_overrides=getattr(model_field, "empty_env_overrides", False),
             )
             model_value, model_source = _normalize_stage_model_for_display(
                 stage, model_value, model_source, resolved
