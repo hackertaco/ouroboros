@@ -197,23 +197,23 @@ def _resolve_execution_model(runtime_backend: str | None) -> str | None:
 
 def _resolve_model_tier_request(
     arguments: Mapping[str, Any],
-) -> tuple[str, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     """Resolve public value, runner override, and delegated round-trip value.
 
-    ``medium`` is the public response default, not an implicit routing pin.  In
-    particular, an omitted value must reach a fresh Codex execution as ``None``:
-    Codex then keeps the model selected by its App/CLI and Ouroboros emits no
-    ``--model`` flag.  An explicitly supplied ``medium`` is different: it pins
-    the run's base tier to ``standard``.  The same omission rule preserves a
-    resumed run's persisted routing contract.
+    Omission is automatic model selection, not an implicit ``medium`` promise.
+    In particular, an omitted value must reach a fresh Codex execution as
+    ``None``: Codex then keeps the model selected by its App/CLI and Ouroboros
+    emits no ``--model`` flag. An explicitly supplied ``medium`` is different:
+    it pins the run's base tier to ``standard``. The same omission rule
+    preserves a resumed run's persisted routing contract.
     """
     requested = arguments.get("model_tier")
-    effective = requested if isinstance(requested, str) and requested else "medium"
     # FastMCP may materialize an omitted optional argument as ``None``.  Treat
     # that exactly like an absent key; only a non-empty string is an intentional
     # model-tier request that may replace automatic Codex selection or a resumed
     # routing contract.
     should_override = isinstance(requested, str) and bool(requested)
+    effective = requested if should_override else None
     return (
         effective,
         tier_from_model_tier_arg(effective) if should_override else None,
@@ -1309,9 +1309,9 @@ class ExecuteSeedHandler(BridgeAwareMixin):
             )
         except ValueError as exc:
             return Result.err(MCPToolError(str(exc), tool_name="ouroboros_execute_seed"))
-        # ``medium`` is the public response/default value, not an explicit resume
-        # override. Preserve a session's resolved routing contract unless the
-        # caller actually supplied model_tier on this invocation.
+        # Omitted model_tier is public automatic selection, not an explicit
+        # resume override. Preserve a session's resolved routing contract unless
+        # the caller actually supplied model_tier on this invocation.
         max_iterations = arguments.get("max_iterations", 10)
         if not is_resume and session_id is None:
             session_id = f"orch_{uuid4().hex[:12]}"

@@ -462,16 +462,22 @@ class CodexCliRuntime:
             return None
 
     def _cli_executable_version_identity(self) -> str | None:
-        """Hash the selected CLI's version response for replay-safe resumes.
+        """Hash the selected CLI's bytes and version response for safe resumes.
 
         The absolute launch path distinguishes parallel installations, while
-        this value detects an in-place Codex upgrade at that same path.  A
-        model-less automatic resume is deliberately unavailable when the
-        executable cannot provide a stable version response.
+        this value detects both in-place binary changes and version-visible
+        upgrades at that same path. A model-less automatic resume is
+        deliberately unavailable when the executable cannot provide a stable
+        version response or content digest.
         """
         executable_path = self._cli_executable_identity()
         if executable_path is None:
             return None
+        try:
+            executable_bytes = Path(executable_path).read_bytes()
+        except OSError:
+            return None
+        content_digest = hashlib.sha256(executable_bytes).hexdigest()
         try:
             result = subprocess.run(
                 [executable_path, "--version"],
@@ -485,7 +491,12 @@ class CodexCliRuntime:
         version_output = (result.stdout or result.stderr).strip()
         if result.returncode != 0 or not version_output:
             return None
-        return self._hash_json_payload({"version_output": version_output})
+        return self._hash_json_payload(
+            {
+                "content_sha256": content_digest,
+                "version_output": version_output,
+            }
+        )
 
     def _resolve_skills_dir(self, skills_dir: str | Path | None) -> Path | None:
         """Resolve an optional explicit skill override directory for intercept metadata."""

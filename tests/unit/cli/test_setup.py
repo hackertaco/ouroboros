@@ -82,6 +82,13 @@ class TestCodexSetup:
         assert provider == {"model": "user-pin"}
         assert "codex" not in profile["providers"]
 
+    def test_codex_profile_provider_mapping_rejects_duplicate_aliases(self) -> None:
+        """Existing canonical-plus-alias mappings are ambiguous and unsafe."""
+        profile = {"providers": {"codex": {}, "codex_cli": {"model": "user-pin"}}}
+
+        with pytest.raises(ValueError, match="Duplicate Codex provider aliases"):
+            setup_cmd._ensure_codex_profile_provider_mapping(profile)
+
     def test_codex_profile_v2_detection_for_unified_profile_help(self) -> None:
         """Codex 0.134 uses --profile itself for profile-v2 files."""
         help_text = """

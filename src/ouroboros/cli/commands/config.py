@@ -206,7 +206,16 @@ def _effective_llm_backend_value(raw_value: object) -> tuple[str, str]:
 
 def _agent_cell(backend: str, installed: dict[str, str | None]) -> str:
     """Render an agent name with an install marker."""
-    return backend if installed.get(backend) else f"{backend} ⚠ not installed"
+    resolved = _normalize_runtime_backend_for_display(backend)
+    return resolved if installed.get(resolved) else f"{resolved} ⚠ not installed"
+
+
+def _normalize_runtime_backend_for_display(backend: object) -> str:
+    raw = str(backend)
+    try:
+        return resolve_runtime_backend_name(raw)
+    except ValueError:
+        return raw.strip().lower()
 
 
 def _is_automatic_model_value(value: str) -> bool:
@@ -257,6 +266,7 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
         get_value(data, GLOBAL_RUNTIME_FIELD.key),
         "claude",
     )
+    resolved_agent_value = _normalize_runtime_backend_for_display(agent_value)
     llm_value, llm_source = _effective_llm_backend_value(
         get_value(data, GLOBAL_LLM_BACKEND_FIELD.key)
     )
@@ -264,7 +274,7 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
     stages: dict[str, dict] = {}
     for stage in Stage:
         stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
-        resolved = str(stage_agent or profile_default or agent_value)
+        resolved = _normalize_runtime_backend_for_display(stage_agent or profile_default or agent_value)
         model_field = STAGE_MODEL_FIELDS.get(stage)
         if model_field is None:
             model_value, model_source, model_key = None, "not configurable", None
@@ -288,9 +298,9 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
     return {
         "defaults": {
             "default_agent": {
-                "value": agent_value,
+                "value": resolved_agent_value,
                 "source": agent_source,
-                "installed": bool(installed.get(agent_value)),
+                "installed": bool(installed.get(resolved_agent_value)),
             },
             "llm_backend": {"value": llm_value, "source": llm_source},
         },
@@ -347,7 +357,7 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
     profile_default = get_value(data, "orchestrator.runtime_profile.default")
     for stage in Stage:
         stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
-        resolved = str(stage_agent or profile_default or agent_value)
+        resolved = _normalize_runtime_backend_for_display(stage_agent or profile_default or agent_value)
         if stage_agent:
             agent_cell = _agent_cell(str(stage_agent), installed)
         else:

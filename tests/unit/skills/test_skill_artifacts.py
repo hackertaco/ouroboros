@@ -160,6 +160,26 @@ def test_codex_setup_gate_accepts_reordered_yaml_and_quoted_toml_mcp_key(tmp_pat
     assert _run_setup_gate(gate, home=tmp_path, codex_home=codex_home) == "CODEX_READY"
 
 
+def test_codex_setup_gate_rejects_empty_mcp_server_mapping(tmp_path: Path) -> None:
+    """The gate must not bypass setup for an unusable empty MCP entry."""
+    repo_root = Path(__file__).resolve().parents[3]
+    codex_home = tmp_path / "alternate-codex-home"
+    config_path = tmp_path / ".ouroboros" / "config.yaml"
+    config_path.parent.mkdir()
+    codex_home.mkdir()
+    config_path.write_text(
+        "orchestrator:\n  runtime_backend: codex\nllm:\n  backend: codex\n",
+        encoding="utf-8",
+    )
+    (codex_home / "config.toml").write_text("[mcp_servers.ouroboros]\n", encoding="utf-8")
+    skill = (repo_root / "skills" / "welcome" / "SKILL.md").read_text(encoding="utf-8")
+    setup_gate_start = skill.index("### Setup Gate: First Use")
+    start = skill.index("CODEX_HOME_DIR=", setup_gate_start)
+    gate = skill[start : skill.index("\n```", start)]
+
+    assert _run_setup_gate(gate, home=tmp_path, codex_home=codex_home) == "CODEX_SETUP_REQUIRED"
+
+
 def test_codex_legacy_gpt5_migration_gate_only_targets_the_old_all_stage_default(
     tmp_path: Path,
 ) -> None:
@@ -213,6 +233,28 @@ def test_claude_setup_gate_accepts_reordered_yaml_and_json_mcp_key(tmp_path: Pat
     gate = skill[start : skill.index("\n```", start)]
 
     assert _run_setup_gate(gate, home=tmp_path) == "SETUP_READY"
+
+
+def test_claude_setup_gate_rejects_empty_mcp_server_mapping(tmp_path: Path) -> None:
+    """Claude mirror uses the same minimum MCP server structural check."""
+    repo_root = Path(__file__).resolve().parents[3]
+    config_path = tmp_path / ".ouroboros" / "config.yaml"
+    mcp_path = tmp_path / ".claude" / "mcp.json"
+    config_path.parent.mkdir()
+    mcp_path.parent.mkdir()
+    config_path.write_text(
+        "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n",
+        encoding="utf-8",
+    )
+    mcp_path.write_text('{"mcpServers": {"ouroboros": {}}}', encoding="utf-8")
+    skill = (repo_root / ".claude-plugin" / "skills" / "welcome" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    setup_gate_start = skill.index("### Setup Gate: First Use")
+    start = skill.index('if python3 - "$HOME/.ouroboros/config.yaml"', setup_gate_start)
+    gate = skill[start : skill.index("\n```", start)]
+
+    assert _run_setup_gate(gate, home=tmp_path) == "SETUP_REQUIRED"
 
 
 def test_resolve_packaged_skills_dir_falls_back_to_repo_root_bundle_when_package_is_stub(

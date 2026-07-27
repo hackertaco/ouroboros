@@ -50,6 +50,11 @@ from ouroboros.orchestrator.profile_loader import (
 from ouroboros.orchestrator.runner import OrchestratorError, OrchestratorRunner
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("ouroboros.config.load_config", get_default_config)
+
+
 def _economics() -> EconomicsConfig:
     """A minimal anthropic-populated economics config (mirrors test_model_routing)."""
     return EconomicsConfig(  # type: ignore[arg-type]
@@ -1036,9 +1041,9 @@ class TestRunnerRouterConstruction:
     ) -> None:
         """An omitted MCP tier preserves Codex's App/CLI-selected model.
 
-        The public MCP response still calls this ``medium``, but it must not be
-        converted into an explicit ``standard`` runner override.  Supplying
-        ``medium`` intentionally is different and re-enables tier routing.
+        The public MCP response reports this as automatic selection, not
+        ``medium``. Supplying ``medium`` intentionally is different and
+        re-enables tier routing.
         """
         monkeypatch.delenv("OUROBOROS_MODEL_TIER_ROUTING", raising=False)
         monkeypatch.delenv("OUROBOROS_EXECUTION_MODEL", raising=False)
@@ -1048,7 +1053,7 @@ class TestRunnerRouterConstruction:
         monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
 
         public_tier, automatic_override, delegated_tier = _resolve_model_tier_request({})
-        assert (public_tier, automatic_override, delegated_tier) == ("medium", None, None)
+        assert (public_tier, automatic_override, delegated_tier) == (None, None, None)
         runtime = CodexCliRuntime(cli_path="/bin/echo", model=None, cwd="/tmp/project")
         runner = self._runner(runtime, base_model_tier=automatic_override)
 

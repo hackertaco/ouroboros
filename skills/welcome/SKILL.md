@@ -118,8 +118,17 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
                 servers.setdefault(table[1], {})
             continue
         if table == ["mcp_servers"] and "=" in line:
+            key, raw_value = line.split("=", 1)
+            server = servers.setdefault(key.strip().strip("'\""), {})
+            if "command" in raw_value:
+                server["command"] = "present"
+            if "url" in raw_value:
+                server["url"] = "present"
+            continue
+        if len(table) >= 2 and table[0] == "mcp_servers" and "=" in line:
             key = line.split("=", 1)[0].strip().strip("'\"")
-            servers.setdefault(key, {})
+            if key in {"command", "url"}:
+                servers.setdefault(table[1], {})[key] = "present"
     return servers
 
 try:
@@ -135,13 +144,17 @@ orchestrator = config.get("orchestrator") if isinstance(config, dict) else None
 llm = config.get("llm") if isinstance(config, dict) else None
 # Equivalent to [mcp_servers\.ouroboros], including quoted TOML key forms.
 mcp_servers = codex_config.get("mcp_servers") if isinstance(codex_config, dict) else None
+ouroboros_mcp = mcp_servers.get("ouroboros") if isinstance(mcp_servers, dict) else None
 ready = (
     isinstance(orchestrator, dict)
     and orchestrator.get("runtime_backend") == "codex"
     and isinstance(llm, dict)
     and llm.get("backend") == "codex"
-    and isinstance(mcp_servers, dict)
-    and isinstance(mcp_servers.get("ouroboros"), dict)
+    and isinstance(ouroboros_mcp, dict)
+    and (
+        isinstance(ouroboros_mcp.get("command"), str)
+        or isinstance(ouroboros_mcp.get("url"), str)
+    )
 )
 raise SystemExit(0 if ready else 1)
 PY
@@ -387,8 +400,17 @@ def toml_mcp_servers(source: str) -> dict[str, dict[str, object]]:
                 servers.setdefault(table[1], {})
             continue
         if table == ["mcp_servers"] and "=" in line:
+            key, raw_value = line.split("=", 1)
+            server = servers.setdefault(key.strip().strip("'\""), {})
+            if "command" in raw_value:
+                server["command"] = "present"
+            if "url" in raw_value:
+                server["url"] = "present"
+            continue
+        if len(table) >= 2 and table[0] == "mcp_servers" and "=" in line:
             key = line.split("=", 1)[0].strip().strip("'\"")
-            servers.setdefault(key, {})
+            if key in {"command", "url"}:
+                servers.setdefault(table[1], {})[key] = "present"
     return servers
 
 try:
@@ -405,13 +427,17 @@ llm = config.get("llm") if isinstance(config, dict) else None
 # This is equivalent to checking [mcp_servers\.ouroboros], but TOML parsing
 # also accepts a quoted "ouroboros" key and does not depend on table ordering.
 mcp_servers = codex_config.get("mcp_servers") if isinstance(codex_config, dict) else None
+ouroboros_mcp = mcp_servers.get("ouroboros") if isinstance(mcp_servers, dict) else None
 ready = (
     isinstance(orchestrator, dict)
     and orchestrator.get("runtime_backend") == "codex"
     and isinstance(llm, dict)
     and llm.get("backend") == "codex"
-    and isinstance(mcp_servers, dict)
-    and isinstance(mcp_servers.get("ouroboros"), dict)
+    and isinstance(ouroboros_mcp, dict)
+    and (
+        isinstance(ouroboros_mcp.get("command"), str)
+        or isinstance(ouroboros_mcp.get("url"), str)
+    )
 )
 raise SystemExit(0 if ready else 1)
 PY

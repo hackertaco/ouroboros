@@ -1487,6 +1487,39 @@ def test_automatic_codex_default_resume_rejects_in_place_cli_upgrade(
         )
 
 
+def test_automatic_codex_default_resume_rejects_same_version_changed_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A wrapper with unchanged --version output must not hide changed bytes."""
+    monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\n# one\necho codex 1.0\n", encoding="utf-8")
+    cli.chmod(0o755)
+
+    original_runtime = CodexCliRuntime(cli_path=cli, model=None, cwd="/tmp/project")
+    original_runtime._runtime_profile = None
+    original_runtime._codex_profile = None
+    original_runtime._resolved_fallback_model = None
+    original_runtime._resolved_fallback_profile = None
+    persisted = OrchestratorRunner(
+        original_runtime, AsyncMock(), MagicMock()
+    )._build_execution_contract(seed=_seed())
+
+    cli.write_text("#!/bin/sh\n# two\necho codex 1.0\n", encoding="utf-8")
+    resumed_runtime = CodexCliRuntime(cli_path=cli, model=None, cwd="/tmp/project")
+    resumed_runtime._runtime_profile = None
+    resumed_runtime._codex_profile = None
+    resumed_runtime._resolved_fallback_model = None
+    resumed_runtime._resolved_fallback_profile = None
+
+    with pytest.raises(OrchestratorError, match="different runtime execution profile"):
+        OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())._restore_execution_contract(
+            {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
+            seed=_seed(),
+        )
+
+
 def test_non_codex_subclass_does_not_inherit_codex_profile_as_model_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2140,9 +2173,9 @@ def test_mcp_model_tier_omission_remains_distinguishable_from_explicit_medium() 
     # ``medium`` (pin standard routing).
     assert parameter.default is None
 
-    assert _resolve_model_tier_request({}) == ("medium", None, None)
+    assert _resolve_model_tier_request({}) == (None, None, None)
     assert _resolve_model_tier_request({"model_tier": None}) == (
-        "medium",
+        None,
         None,
         None,
     )

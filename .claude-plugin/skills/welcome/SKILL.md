@@ -103,13 +103,17 @@ orchestrator = config.get("orchestrator") if isinstance(config, dict) else None
 llm = config.get("llm") if isinstance(config, dict) else None
 # Existing YAML form: runtime_backend: claude. Parsing avoids assuming its order.
 mcp_servers = mcp_config.get("mcpServers") if isinstance(mcp_config, dict) else None
+ouroboros_mcp = mcp_servers.get("ouroboros") if isinstance(mcp_servers, dict) else None
 ready = (
     isinstance(orchestrator, dict)
     and orchestrator.get("runtime_backend") == "claude"
     and isinstance(llm, dict)
     and llm.get("backend") == "claude"
-    and isinstance(mcp_servers, dict)
-    and isinstance(mcp_servers.get("ouroboros"), dict)
+    and isinstance(ouroboros_mcp, dict)
+    and (
+        isinstance(ouroboros_mcp.get("command"), str)
+        or isinstance(ouroboros_mcp.get("url"), str)
+    )
 )
 raise SystemExit(0 if ready else 1)
 PY
@@ -218,13 +222,17 @@ orchestrator = config.get("orchestrator") if isinstance(config, dict) else None
 llm = config.get("llm") if isinstance(config, dict) else None
 # Existing YAML form: runtime_backend: claude. Parsing avoids assuming its order.
 mcp_servers = mcp_config.get("mcpServers") if isinstance(mcp_config, dict) else None
+ouroboros_mcp = mcp_servers.get("ouroboros") if isinstance(mcp_servers, dict) else None
 ready = (
     isinstance(orchestrator, dict)
     and orchestrator.get("runtime_backend") == "claude"
     and isinstance(llm, dict)
     and llm.get("backend") == "claude"
-    and isinstance(mcp_servers, dict)
-    and isinstance(mcp_servers.get("ouroboros"), dict)
+    and isinstance(ouroboros_mcp, dict)
+    and (
+        isinstance(ouroboros_mcp.get("command"), str)
+        or isinstance(ouroboros_mcp.get("url"), str)
+    )
 )
 raise SystemExit(0 if ready else 1)
 PY

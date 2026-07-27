@@ -213,6 +213,26 @@ def test_show_json_emits_machine_readable_effective_view(monkeypatch, tmp_path) 
     assert payload["stages"]["interview"]["agent"] == "opencode"
 
 
+def test_show_json_normalizes_runtime_env_backend(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(monkeypatch, tmp_path, {"orchestrator": {"runtime_backend": "claude"}})
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "CODEX")
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["defaults"]["default_agent"]["value"] == "codex"
+    assert payload["stages"]["interview"]["agent"] == "codex"
+    assert payload["stages"]["interview"]["agent_installed"] is True
+
+
 def test_show_json_uses_runtime_env_as_llm_backend_fallback(monkeypatch, tmp_path) -> None:
     import json
 

@@ -56,9 +56,6 @@ def _provider_config(
     backend: str,
 ) -> LLMProviderProfileConfig | None:
     providers = profile.providers
-    if backend in providers:
-        return providers[backend]
-
     matched: tuple[str, LLMProviderProfileConfig] | None = None
     for key, value in providers.items():
         if _normalize_backend(key) == backend:

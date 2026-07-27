@@ -1311,6 +1311,16 @@ def _ensure_codex_profile_provider_mapping(profile: dict) -> dict:
         providers = {}
         profile["providers"] = providers
 
+    codex_entries = [
+        (provider, provider_config)
+        for provider, provider_config in providers.items()
+        if _is_codex_provider_alias(provider)
+    ]
+    if len(codex_entries) > 1:
+        names = ", ".join(repr(provider) for provider, _ in codex_entries)
+        msg = f"Duplicate Codex provider aliases in an LLM profile: {names}"
+        raise ValueError(msg)
+
     for provider in ("codex", "codex_cli"):
         provider_config = providers.get(provider)
         if isinstance(provider_config, dict):
