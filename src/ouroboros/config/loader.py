@@ -973,7 +973,7 @@ def get_execution_model() -> str | None:
     env_model = os.environ.get("OUROBOROS_EXECUTION_MODEL")
     if env_model is not None:
         stripped = env_model.strip()
-        return stripped or None
+        return None if not stripped or stripped.lower() in {"default", "current"} else stripped
     try:
         model = load_config().execution.default_model
     except ConfigError:

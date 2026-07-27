@@ -11,7 +11,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ouroboros.config.models import EconomicsConfig, ModelConfig, TierConfig
+from ouroboros.config.models import (
+    EconomicsConfig,
+    ModelConfig,
+    OuroborosConfig,
+    TierConfig,
+    get_default_config,
+)
 from ouroboros.core.seed import OntologySchema, Seed, SeedMetadata
 from ouroboros.core.worktree import TaskWorkspace
 from ouroboros.events.base import BaseEvent
@@ -153,6 +159,8 @@ def _assert_process_local_runtime_contract(contract: dict[str, object]) -> None:
 def _clear_model_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OUROBOROS_MODEL_TIER_ROUTING", raising=False)
     monkeypatch.delenv("OUROBOROS_EXECUTION_MODEL", raising=False)
+    monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
+    monkeypatch.setattr("ouroboros.config.load_config", get_default_config)
 
 
 def test_router_contract_round_trips_custom_frontier_policy() -> None:

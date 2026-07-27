@@ -46,6 +46,39 @@ def test_config_show_unchanged(monkeypatch, tmp_path) -> None:
     assert "codex" in result.output
 
 
+def test_config_show_text_resolves_explicit_stage_agents(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("ouroboros.config.models.get_config_dir", lambda: tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        yaml.dump(
+            {
+                "orchestrator": {
+                    "runtime_backend": "opencode",
+                    "runtime_profile": {
+                        "default": "opencode",
+                        "stages": {
+                            "interview": "codex",
+                            "execute": "claude",
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"opencode": "/bin/opencode", "codex": "/bin/codex", "claude": "/bin/claude"},
+    )
+
+    result = runner.invoke(app, ["show"])
+
+    assert result.exit_code == 0, result.output
+    assert "interview" in result.output
+    assert "codex" in result.output
+    assert "execute" in result.output
+    assert "claude" in result.output
+
+
 def test_config_set_unknown_key_still_rejected(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("ouroboros.config.models.get_config_dir", lambda: tmp_path)
     (tmp_path / "config.yaml").write_text(yaml.dump({}))
@@ -163,6 +196,7 @@ def test_show_json_emits_machine_readable_effective_view(monkeypatch, tmp_path) 
         "ouroboros.backends.model_catalog.installed_backends",
         lambda: {"opencode": "/bin/opencode", "codex": "/bin/codex"},
     )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
     result = runner.invoke(app, ["show", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -171,8 +205,8 @@ def test_show_json_emits_machine_readable_effective_view(monkeypatch, tmp_path) 
         "agent": "codex",
         "inherited": False,
         "agent_installed": True,
-        "model": "backend default",
-        "model_source": "default",
+        "model": "Codex current selected model (concrete model not reported by Codex)",
+        "model_source": "automatic Codex selection",
         "model_key": "execution.default_model",
     }
     assert payload["stages"]["interview"]["inherited"] is True

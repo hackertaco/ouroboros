@@ -49,10 +49,38 @@ class TestCodexSetup:
         with (
             patch("ouroboros.cli.commands.setup.shutil.which", return_value=None),
             patch("ouroboros.cli.commands.setup._CODEX_APP_CLI_PATH", app_cli),
+            patch("ouroboros.config.get_codex_cli_path", return_value=None),
         ):
             detected = setup_cmd._detect_runtimes()
 
         assert detected["codex"] == str(app_cli)
+
+    def test_detect_runtimes_prefers_configured_codex_cli_path(self, tmp_path: Path) -> None:
+        """A configured Codex executable must win over PATH and App fallback."""
+        configured = tmp_path / "custom" / "codex"
+        configured.parent.mkdir(parents=True)
+        configured.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        configured.chmod(0o755)
+
+        with (
+            patch(
+                "ouroboros.cli.commands.setup.shutil.which",
+                side_effect=lambda name: "/usr/local/bin/codex" if name == "codex" else None,
+            ),
+            patch("ouroboros.config.get_codex_cli_path", return_value=str(configured)),
+        ):
+            detected = setup_cmd._detect_runtimes()
+
+        assert detected["codex"] == str(configured)
+
+    def test_codex_profile_provider_mapping_preserves_normalized_user_alias(self) -> None:
+        """Setup must not shadow a user-owned Codex alias with a new canonical key."""
+        profile = {"providers": {"CODEX_CLI": {"model": "user-pin"}}}
+
+        provider = setup_cmd._ensure_codex_profile_provider_mapping(profile)
+
+        assert provider == {"model": "user-pin"}
+        assert "codex" not in profile["providers"]
 
     def test_codex_profile_v2_detection_for_unified_profile_help(self) -> None:
         """Codex 0.134 uses --profile itself for profile-v2 files."""

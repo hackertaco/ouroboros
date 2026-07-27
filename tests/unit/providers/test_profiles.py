@@ -43,6 +43,25 @@ def test_resolve_completion_profile_uses_codex_backend_profile() -> None:
     assert resolved.config.max_turns == 1
 
 
+def test_resolve_completion_profile_rejects_duplicate_normalized_provider_aliases() -> None:
+    """Ambiguous Codex aliases must not make provider order change the pin."""
+    config = OuroborosConfig(
+        llm_profiles={
+            "fast": {
+                "providers": {
+                    "CODEX": {"model": "first-pin"},
+                    "codex_cli": {"model": "second-pin"},
+                }
+            },
+        },
+        llm_role_profiles={"qa": "fast"},
+    )
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=config):
+        with pytest.raises(ConfigError, match="duplicate provider aliases"):
+            resolve_completion_profile(CompletionConfig(model="default", role="qa"), backend="codex")
+
+
 def test_resolve_completion_profile_preserves_codex_xhigh_effort() -> None:
     """Codex-native provider effort fits the public resolved-config contract."""
     config = OuroborosConfig(

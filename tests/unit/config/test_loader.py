@@ -2294,6 +2294,19 @@ class TestGetExecutionModel:
         ):
             assert get_execution_model() == "env-model"
 
+    @pytest.mark.parametrize("value", ("", "default", "current"))
+    def test_env_automatic_execute_values_do_not_pin_a_model(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        from ouroboros.config.loader import get_execution_model
+
+        monkeypatch.setenv("OUROBOROS_EXECUTION_MODEL", value)
+        with patch(
+            "ouroboros.config.loader.load_config",
+            return_value=OuroborosConfig(execution=ExecutionConfig(default_model="saved-model")),
+        ):
+            assert get_execution_model() is None
+
     def test_persisted_execute_model_is_used_when_env_is_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

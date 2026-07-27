@@ -347,10 +347,10 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
     profile_default = get_value(data, "orchestrator.runtime_profile.default")
     for stage in Stage:
         stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
+        resolved = str(stage_agent or profile_default or agent_value)
         if stage_agent:
             agent_cell = _agent_cell(str(stage_agent), installed)
         else:
-            resolved = str(profile_default or agent_value)
             agent_cell = f"(inherit) → {_agent_cell(resolved, installed)}"
         model_field = STAGE_MODEL_FIELDS.get(stage)
         if model_field is None:

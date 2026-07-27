@@ -183,6 +183,19 @@ def _detect_runtimes() -> dict[str, str | None]:
         path = shutil.which(name)
         runtimes[name] = path
 
+    # Codex: explicit-path config (env var / config.yaml) is authoritative over
+    # PATH and the App bundle when it points at a runnable executable.
+    try:
+        from ouroboros.config import get_codex_cli_path
+
+        codex_path = get_codex_cli_path()
+    except Exception:
+        codex_path = None
+    if codex_path:
+        configured = Path(codex_path)
+        if configured.is_file() and os.access(configured, os.X_OK):
+            runtimes["codex"] = str(configured)
+
     # Codex App bundles this executable but does not always add it to the
     # terminal PATH. Treat it as an available Codex runtime for App-only users.
     if (
@@ -1305,6 +1318,14 @@ def _ensure_codex_profile_provider_mapping(profile: dict) -> dict:
         if provider_config is not None:
             msg = f"Invalid non-mapping {provider!r} provider profile."
             raise ValueError(msg)
+
+    for provider, provider_config in providers.items():
+        if not _is_codex_provider_alias(provider):
+            continue
+        if isinstance(provider_config, dict):
+            return provider_config
+        msg = f"Invalid non-mapping {provider!r} provider profile."
+        raise ValueError(msg)
 
     provider_config = {}
     providers["codex"] = provider_config

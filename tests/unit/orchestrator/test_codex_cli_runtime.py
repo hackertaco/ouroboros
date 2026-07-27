@@ -118,6 +118,44 @@ def test_profile_fingerprint_preserves_v1_hash_when_effort_is_dormant() -> None:
         )
 
 
+def test_profile_resolution_fingerprint_preserves_codex_alias_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-canonical Codex aliases can affect resolution and must stay ordered."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    first = OuroborosConfig(
+        llm_profiles={
+            "qa": {
+                "providers": {
+                    "CODEX": {"model": "first-pin"},
+                    "codex_cli": {"model": "second-pin"},
+                }
+            }
+        }
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "qa": {
+                "providers": {
+                    "codex_cli": {"model": "second-pin"},
+                    "CODEX": {"model": "first-pin"},
+                }
+            }
+        }
+    )
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        first_fingerprint = runtime._fingerprint_profile_resolution_config()
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        second_fingerprint = runtime._fingerprint_profile_resolution_config()
+
+    assert first_fingerprint != second_fingerprint
+
+
 class TestComposePromptDirectiveFencing:
     """System instructions and tooling must be fenced as binding directives."""
 

@@ -613,8 +613,8 @@ class CodexCliRuntime:
 
         profiles: dict[str, object] = {}
         for name, profile in sorted(config.llm_profiles.items()):
-            codex_providers: dict[str, dict[str, str | None]] = {}
-            for key, provider in sorted(profile.providers.items()):
+            ordered_codex_providers: list[tuple[str, dict[str, str | None]]] = []
+            for key, provider in profile.providers.items():
                 if key.strip().lower() not in {"codex", "codex_cli"}:
                     continue
                 provider_contract: dict[str, str | None] = {
@@ -626,7 +626,20 @@ class CodexCliRuntime:
                 # a null value changes no command-line behavior.
                 if provider.reasoning_effort is not None:
                     provider_contract["reasoning_effort"] = provider.reasoning_effort
-                codex_providers[key] = provider_contract
+                ordered_codex_providers.append((key, provider_contract))
+
+            canonical_shape = all(key in {"codex", "codex_cli"} for key, _ in ordered_codex_providers)
+            if canonical_shape:
+                codex_providers: object = dict(sorted(ordered_codex_providers))
+            else:
+                codex_providers = [
+                    {
+                        "key": key,
+                        "normalized_backend": "codex",
+                        "config": contract,
+                    }
+                    for key, contract in ordered_codex_providers
+                ]
 
             profile_contract: dict[str, object] = {
                 "model": profile.model,
