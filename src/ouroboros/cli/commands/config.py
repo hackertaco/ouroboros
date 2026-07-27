@@ -274,7 +274,9 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
     stages: dict[str, dict] = {}
     for stage in Stage:
         stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
-        resolved = _normalize_runtime_backend_for_display(stage_agent or profile_default or agent_value)
+        resolved = _normalize_runtime_backend_for_display(
+            stage_agent or profile_default or agent_value
+        )
         model_field = STAGE_MODEL_FIELDS.get(stage)
         if model_field is None:
             model_value, model_source, model_key = None, "not configurable", None
@@ -357,7 +359,9 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
     profile_default = get_value(data, "orchestrator.runtime_profile.default")
     for stage in Stage:
         stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
-        resolved = _normalize_runtime_backend_for_display(stage_agent or profile_default or agent_value)
+        resolved = _normalize_runtime_backend_for_display(
+            stage_agent or profile_default or agent_value
+        )
         if stage_agent:
             agent_cell = _agent_cell(str(stage_agent), installed)
         else:

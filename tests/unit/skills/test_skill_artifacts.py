@@ -202,10 +202,7 @@ def test_codex_setup_gate_rejects_blank_mcp_endpoint_values(tmp_path: Path) -> N
         '[mcp_servers]\n"ouroboros" = { command = "" }\n',
     ):
         (codex_home / "config.toml").write_text(toml, encoding="utf-8")
-        assert (
-            _run_setup_gate(gate, home=tmp_path, codex_home=codex_home)
-            == "CODEX_SETUP_REQUIRED"
-        )
+        assert _run_setup_gate(gate, home=tmp_path, codex_home=codex_home) == "CODEX_SETUP_REQUIRED"
 
 
 def test_codex_legacy_gpt5_migration_gate_only_targets_the_old_all_stage_default(
