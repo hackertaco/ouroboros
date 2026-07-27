@@ -1292,7 +1292,16 @@ class TestCodexSetup:
             (codex_home / "rules").mkdir()
             (codex_home / "rules" / "ouroboros.md").write_text("new rule\n", encoding="utf-8")
             (codex_home / "skills").mkdir()
-            (codex_home / "skills" / "welcome.md").write_text("new skill\n", encoding="utf-8")
+            (codex_home / "skills" / "ouroboros-welcome").mkdir()
+            (codex_home / "skills" / "ouroboros-welcome" / "SKILL.md").write_text(
+                "new skill\n",
+                encoding="utf-8",
+            )
+            (codex_home / "sessions").mkdir()
+            (codex_home / "sessions" / "active.jsonl").write_text(
+                "user session created during setup\n",
+                encoding="utf-8",
+            )
             return True
 
         with (
@@ -1315,7 +1324,10 @@ class TestCodexSetup:
         assert codex_config.read_text(encoding="utf-8") == original_toml
         assert profile_path.read_text(encoding="utf-8") == profile_contents
         assert not (codex_home / "rules" / "ouroboros.md").exists()
-        assert not (codex_home / "skills" / "welcome.md").exists()
+        assert not (codex_home / "skills" / "ouroboros-welcome").exists()
+        assert (codex_home / "sessions" / "active.jsonl").read_text(encoding="utf-8") == (
+            "user session created during setup\n"
+        )
 
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path

@@ -85,6 +85,53 @@ def test_codex_config_fingerprint_still_detects_project_runtime_overrides(
         runtime._assert_codex_config_files_unchanged()
 
 
+def test_codex_config_fingerprint_ignores_unreachable_profile_v2_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model = "gpt-test"\n', encoding="utf-8")
+    (codex_home / "reachable.config.toml").write_text(
+        'model_provider = "proxy-a"\n',
+        encoding="utf-8",
+    )
+    (codex_home / "unused.config.toml").write_text(
+        'model_provider = "proxy-a"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    runtime._resolved_fallback_profile = "reachable"
+    original = runtime._fingerprint_codex_config_files()
+
+    (codex_home / "unused.config.toml").write_text(
+        'model_provider = "proxy-b"\n',
+        encoding="utf-8",
+    )
+
+    assert runtime._fingerprint_codex_config_files() == original
+
+
+def test_codex_config_fingerprint_tracks_reachable_profile_v2_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model = "gpt-test"\n', encoding="utf-8")
+    profile_path = codex_home / "reachable.config.toml"
+    profile_path.write_text('model_provider = "proxy-a"\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    runtime._resolved_fallback_profile = "reachable"
+    original = runtime._fingerprint_codex_config_files()
+
+    profile_path.write_text('model_provider = "proxy-b"\n', encoding="utf-8")
+
+    assert runtime._fingerprint_codex_config_files() != original
+
+
 def test_profile_fingerprint_preserves_v1_hash_when_effort_is_dormant() -> None:
     """Null effort fields must not invalidate a pre-effort resume contract."""
     config = OuroborosConfig(
@@ -118,6 +165,49 @@ def test_profile_fingerprint_preserves_v1_hash_when_effort_is_dormant() -> None:
         )
 
 
+def test_profile_fingerprint_ignores_unreachable_ouroboros_profiles() -> None:
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    first = OuroborosConfig(
+        llm_profiles={
+            "standard": {"providers": {"codex": {"profile": "reachable"}}},
+        },
+        llm_role_profiles={"agent_runtime": "standard"},
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "standard": {"providers": {"codex": {"profile": "reachable"}}},
+            "unused": {"providers": {"codex": {"profile": "unused"}}},
+        },
+        llm_role_profiles={"agent_runtime": "standard", "unused_role": "unused"},
+    )
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        original = runtime._fingerprint_profile_resolution_config()
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        assert runtime._fingerprint_profile_resolution_config() == original
+
+
+def test_profile_fingerprint_tracks_reachable_ouroboros_profile() -> None:
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+    first = OuroborosConfig(
+        llm_profiles={
+            "standard": {"providers": {"codex": {"profile": "reachable-a"}}},
+        },
+        llm_role_profiles={"agent_runtime": "standard"},
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "standard": {"providers": {"codex": {"profile": "reachable-b"}}},
+        },
+        llm_role_profiles={"agent_runtime": "standard"},
+    )
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        original = runtime._fingerprint_profile_resolution_config()
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        assert runtime._fingerprint_profile_resolution_config() != original
+
+
 def test_profile_resolution_fingerprint_preserves_codex_alias_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -134,7 +224,8 @@ def test_profile_resolution_fingerprint_preserves_codex_alias_order(
                     "codex_cli": {"model": "second-pin"},
                 }
             }
-        }
+        },
+        llm_role_profiles={"agent_runtime": "qa"},
     )
     second = OuroborosConfig(
         llm_profiles={
@@ -144,7 +235,8 @@ def test_profile_resolution_fingerprint_preserves_codex_alias_order(
                     "CODEX": {"model": "first-pin"},
                 }
             }
-        }
+        },
+        llm_role_profiles={"agent_runtime": "qa"},
     )
     runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
 
@@ -164,8 +256,14 @@ def test_profile_resolution_fingerprint_canonicalizes_single_codex_alias(
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    lower = OuroborosConfig(llm_profiles={"qa": {"providers": {"codex": {"model": "gpt-5"}}}})
-    upper = OuroborosConfig(llm_profiles={"qa": {"providers": {"CODEX": {"model": "gpt-5"}}}})
+    lower = OuroborosConfig(
+        llm_profiles={"qa": {"providers": {"codex": {"model": "gpt-5"}}}},
+        llm_role_profiles={"agent_runtime": "qa"},
+    )
+    upper = OuroborosConfig(
+        llm_profiles={"qa": {"providers": {"CODEX": {"model": "gpt-5"}}}},
+        llm_role_profiles={"agent_runtime": "qa"},
+    )
     runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
 
     with patch("ouroboros.providers.profiles.load_config", return_value=lower):

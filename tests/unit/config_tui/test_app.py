@@ -574,6 +574,34 @@ async def test_execute_backend_change_clears_stale_execute_model_pin(app_env, mo
 
 
 @pytest.mark.asyncio
+async def test_execute_backend_change_preserves_replacement_execute_model(
+    app_env, monkeypatch
+) -> None:
+    """A same-save Execute model replacement must not be overwritten by stale-pin clearing."""
+    app_env.setdefault("execution", {})["default_model"] = "gpt-5"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one(f"#stage-runtime-{Stage.EXECUTE.value}", Select).value = "claude"
+        await pilot.pause()
+        pilot.app.query_one(
+            f"#stage-model-{Stage.EXECUTE.value}", Select
+        ).value = "claude-sonnet-4-6"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_profile.stages.execute"] == "claude"
+    assert captured["execution.default_model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
 async def test_env_effective_execute_backend_does_not_clear_pin_on_unrelated_stage_change(
     app_env, monkeypatch
 ) -> None:

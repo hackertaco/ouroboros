@@ -292,6 +292,12 @@ class SettingsApp(App[None]):
         self._fetch_pending: set[str] = set()
         # Last concrete model per stage, restored when a search is cancelled.
         self._last_model_value: dict[str, str | None] = {}
+        # Runtime changes refresh model selects automatically. Keep those
+        # automatic values separate from explicit user model picks so backend-
+        # only saves can clear stale legacy model pins.
+        self._explicit_stage_model_changes: set[str] = set()
+        self._programmatic_stage_model_changes: set[str] = set()
+        self._automatic_stage_model_values: dict[str, str | None] = {}
         # What the "default" sentinel resolves to per backend (config-file
         # hint, e.g. hermes → gpt-5.5). Cached: file reads once per backend.
         self._default_hints: dict[str, str | None] = {}
@@ -609,10 +615,16 @@ class SettingsApp(App[None]):
             stage = Stage(select_id.removeprefix("stage-model-"))
             custom_input = self.query_one(f"#stage-model-custom-{stage.value}", Input)
             custom_input.set_class(event.value != CUSTOM_SENTINEL, "hidden")
+            is_programmatic = stage.value in self._programmatic_stage_model_changes
+            self._programmatic_stage_model_changes.discard(stage.value)
             if event.value == SEARCH_SENTINEL:
                 self._open_model_search(stage)
             elif not _is_blank(event.value) and event.value != CUSTOM_SENTINEL:
                 self._last_model_value[stage.value] = str(event.value)
+                if not is_programmatic:
+                    self._explicit_stage_model_changes.add(stage.value)
+            elif not is_programmatic:
+                self._explicit_stage_model_changes.add(stage.value)
 
     def _open_model_search(self, stage: Stage) -> None:
         backend = self._selected_runtime(stage)
@@ -620,14 +632,14 @@ class SettingsApp(App[None]):
 
         def _picked(model: str | None) -> None:
             previous = self._last_model_value.get(stage.value)
-            self._set_stage_model(stage, model or previous)
+            self._set_stage_model(stage, model or previous, explicit=True)
 
         self.push_screen(
             ModelSearchScreen(models, title=f"{stage.value.title()} model — {backend}"),
             _picked,
         )
 
-    def _set_stage_model(self, stage: Stage, model: str | None) -> None:
+    def _set_stage_model(self, stage: Stage, model: str | None, *, explicit: bool = True) -> None:
         if stage not in STAGE_MODEL_FIELDS:
             return
         backend = self._selected_runtime(stage)
@@ -635,6 +647,9 @@ class SettingsApp(App[None]):
         model_select.set_options(self._model_options(backend, model))
         if model:
             model_select.value = model
+        if explicit:
+            self._explicit_stage_model_changes.add(stage.value)
+            self._automatic_stage_model_values.pop(stage.value, None)
 
     def _sync_stage_card(self, stage: Stage) -> None:
         runtime_select = self.query_one(f"#stage-runtime-{stage.value}", Select)
@@ -681,10 +696,16 @@ class SettingsApp(App[None]):
         options = self._model_options(backend, keep)
         model_select.set_options(options)
         concrete = [v for _, v in options if v not in (SEARCH_SENTINEL, CUSTOM_SENTINEL)]
+        automatic_value = None
         if keep:
+            self._programmatic_stage_model_changes.add(stage.value)
             model_select.value = keep
+            automatic_value = keep
         elif concrete:
+            self._programmatic_stage_model_changes.add(stage.value)
             model_select.value = concrete[0]
+            automatic_value = concrete[0]
+        self._automatic_stage_model_values[stage.value] = automatic_value
         # Custom-only backends (no known models) stay blank for free text.
 
     def _refresh_install_warning(self, stage: Stage, value: Any) -> None:
@@ -796,6 +817,12 @@ class SettingsApp(App[None]):
                     if custom:
                         record(model_field.key, custom)
                 elif not _is_blank(model_value):
+                    automatic_model = self._automatic_stage_model_values.get(stage.value)
+                    if stage is Stage.EXECUTE and (
+                        stage.value not in self._explicit_stage_model_changes
+                        or (automatic_model is not None and str(model_value) == automatic_model)
+                    ):
+                        continue
                     model_text = str(model_value)
                     if model_text == DEFAULT_MODEL_SENTINEL and not uses_default_model_sentinel(
                         self._selected_runtime(stage)
@@ -823,6 +850,19 @@ class SettingsApp(App[None]):
             if (
                 old_execute_backend != new_execute_backend
                 and get_value(self._raw, "execution.default_model") is not None
+                and (
+                    Stage.EXECUTE.value not in self._explicit_stage_model_changes
+                    or (
+                        self._automatic_stage_model_values.get(Stage.EXECUTE.value) is not None
+                        and str(
+                            self.query_one(
+                                f"#stage-model-{Stage.EXECUTE.value}",
+                                Select,
+                            ).value
+                        )
+                        == self._automatic_stage_model_values[Stage.EXECUTE.value]
+                    )
+                )
             ):
                 changes["execution.default_model"] = None
 

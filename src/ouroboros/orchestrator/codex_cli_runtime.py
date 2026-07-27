@@ -622,8 +622,24 @@ class CodexCliRuntime:
             # that state stable without persisting path-rich error messages.
             return self._hash_json_payload({"version": 1, "load_error": type(exc).__name__})
 
+        relevant_role_profiles: dict[str, str] = {}
+        relevant_profile_names: set[str] = set()
+        if isinstance(self._runtime_profile, str) and self._runtime_profile.strip():
+            relevant_profile_names.add(self._runtime_profile.strip())
+        else:
+            for role, role_profile in sorted(config.llm_role_profiles.items()):
+                if role != _RUNTIME_PROFILE_ROLE_PREFIX and not role.startswith(
+                    f"{_RUNTIME_PROFILE_ROLE_PREFIX}_"
+                ):
+                    continue
+                if role_profile:
+                    relevant_role_profiles[role] = role_profile
+                    relevant_profile_names.add(role_profile)
+
         profiles: dict[str, object] = {}
         for name, profile in sorted(config.llm_profiles.items()):
+            if name not in relevant_profile_names:
+                continue
             ordered_codex_providers: list[tuple[str, dict[str, str | None]]] = []
             for key, provider in profile.providers.items():
                 if key.strip().lower() not in {"codex", "codex_cli"}:
@@ -666,7 +682,7 @@ class CodexCliRuntime:
             {
                 "version": 1,
                 "llm_profiles": profiles,
-                "llm_role_profiles": dict(sorted(config.llm_role_profiles.items())),
+                "llm_role_profiles": dict(sorted(relevant_role_profiles.items())),
             }
         )
 
@@ -676,14 +692,13 @@ class CodexCliRuntime:
         return Path(configured).expanduser() if configured else Path.home() / ".codex"
 
     def _fingerprint_codex_config_files(self) -> str:
-        """Hash global Codex config and every profile-v2 TOML by name/content."""
+        """Hash global Codex config plus command-reachable profile-v2 TOML."""
         codex_home = self._codex_home()
         candidates: dict[str, Path] = {"config.toml": codex_home / "config.toml"}
-        try:
-            for path in codex_home.glob("*.config.toml"):
-                candidates[path.name] = path
-        except OSError as exc:
-            raise RuntimeError("Cannot inspect Codex profile configuration") from exc
+        for profile_name in {self._codex_profile, self._resolved_fallback_profile}:
+            if isinstance(profile_name, str) and profile_name.strip():
+                filename = f"{profile_name.strip()}.config.toml"
+                candidates[filename] = codex_home / filename
 
         digest = hashlib.sha256()
         digest.update(b"ouroboros-codex-config-v1\0")

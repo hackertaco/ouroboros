@@ -1520,6 +1520,113 @@ def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
     path.write_bytes(snapshot)
 
 
+def _snapshot_path(path: Path) -> dict[Path, bytes] | bytes | None:
+    """Snapshot a single managed file or directory tree.
+
+    ``None`` means the path did not exist.  Directory snapshots are relative to
+    the managed root; restoring them never walks or prunes the parent
+    CODEX_HOME.
+    """
+    if not path.exists():
+        return None
+    if path.is_file() or path.is_symlink():
+        return path.read_bytes()
+    if not path.is_dir():
+        return None
+
+    snapshot: dict[Path, bytes] = {}
+    for child in path.rglob("*"):
+        if child.is_file():
+            snapshot[child.relative_to(path)] = child.read_bytes()
+    return snapshot
+
+
+def _restore_path_snapshot(path: Path, snapshot: dict[Path, bytes] | bytes | None) -> None:
+    """Restore one managed path without touching sibling Codex user state."""
+    if isinstance(snapshot, bytes):
+        _restore_file_snapshot(path, snapshot)
+        return
+
+    if path.exists():
+        if path.is_dir():
+            for child in sorted(path.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+                if child.is_file() or child.is_symlink():
+                    child.unlink()
+                elif child.is_dir():
+                    try:
+                        child.rmdir()
+                    except OSError:
+                        pass
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        else:
+            path.unlink()
+
+    if snapshot is None:
+        return
+
+    path.mkdir(parents=True, exist_ok=True)
+    for relative_path, contents in snapshot.items():
+        target = path / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+
+
+def _managed_codex_setup_paths(codex_home: Path) -> tuple[Path, ...]:
+    """Return only Codex paths Ouroboros setup owns and may roll back."""
+    paths: set[Path] = {
+        codex_home / "config.toml",
+        codex_home / f"{_CODEX_WORKER_PROFILE_NAME}.config.toml",
+        *(
+            codex_home / f"{profile_name}.config.toml"
+            for profile_name in _CODEX_DEFAULT_PROFILE_SECTIONS
+        ),
+    }
+
+    rules_dir = codex_home / "rules"
+    if rules_dir.exists():
+        paths.update(
+            path
+            for path in rules_dir.iterdir()
+            if path.name == "ouroboros.md"
+            or (path.name.startswith("ouroboros-") and path.suffix == ".md")
+        )
+    skills_dir = codex_home / "skills"
+    if skills_dir.exists():
+        paths.update(path for path in skills_dir.iterdir() if path.name.startswith("ouroboros-"))
+
+    try:
+        from ouroboros.codex import resolve_packaged_codex_assets
+
+        with resolve_packaged_codex_assets() as assets:
+            paths.update(
+                codex_home / artifact.relative_install_path for artifact in assets.managed_artifacts
+            )
+    except (FileNotFoundError, OSError, ValueError):
+        # Artifact installation will surface the real failure later.  Rollback
+        # still protects already-installed managed paths discovered above.
+        pass
+
+    return tuple(sorted(paths))
+
+
+def _snapshot_managed_codex_setup_paths(
+    codex_home: Path,
+) -> dict[Path, dict[Path, bytes] | bytes | None]:
+    """Snapshot setup-owned Codex paths without snapshotting the whole home."""
+    return {path: _snapshot_path(path) for path in _managed_codex_setup_paths(codex_home)}
+
+
+def _restore_managed_codex_setup_paths(
+    snapshot: dict[Path, dict[Path, bytes] | bytes | None],
+) -> None:
+    """Restore only setup-owned Codex paths captured before setup."""
+    for path, path_snapshot in snapshot.items():
+        _restore_path_snapshot(path, path_snapshot)
+
+
 def _snapshot_directory(path: Path) -> dict[Path, bytes]:
     """Return a recursive file snapshot for rollback."""
     snapshot: dict[Path, bytes] = {}
@@ -1593,14 +1700,14 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # setup in a false-success state.
     codex_home = resolve_codex_home()
     codex_config_path = codex_home / "config.toml"
-    codex_home_snapshot = _snapshot_directory(codex_home)
+    managed_codex_snapshot = _snapshot_managed_codex_setup_paths(codex_home)
     codex_config_snapshot = _snapshot_file(codex_config_path)
     config_snapshot = _snapshot_file(config_path)
     credentials_snapshot = _snapshot_file(credentials_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
-        _restore_directory_snapshot(codex_home, codex_home_snapshot)
+        _restore_managed_codex_setup_paths(managed_codex_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         print_error(f"Could not save Codex MCP config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
@@ -1621,7 +1728,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             )
             credentials_path.chmod(0o600)
     except OSError as exc:
-        _restore_directory_snapshot(codex_home, codex_home_snapshot)
+        _restore_managed_codex_setup_paths(managed_codex_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
         _restore_file_snapshot(credentials_path, credentials_snapshot)
@@ -1656,7 +1763,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         if not _register_codex_worker_profile(codex_path=codex_path):
             raise OSError("Codex worker profile registration failed")
     except (OSError, ValueError) as exc:
-        _restore_directory_snapshot(codex_home, codex_home_snapshot)
+        _restore_managed_codex_setup_paths(managed_codex_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
         _restore_file_snapshot(credentials_path, credentials_snapshot)
