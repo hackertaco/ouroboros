@@ -639,11 +639,11 @@ class CodexCliRuntime:
                     provider_contract["reasoning_effort"] = provider.reasoning_effort
                 ordered_codex_providers.append((key, provider_contract))
 
-            canonical_shape = all(
-                key in {"codex", "codex_cli"} for key, _ in ordered_codex_providers
-            )
-            if canonical_shape:
-                codex_providers: object = dict(sorted(ordered_codex_providers))
+            if len(ordered_codex_providers) == 1:
+                _, contract = ordered_codex_providers[0]
+                codex_providers: object = {"codex": contract}
+            elif all(key in {"codex", "codex_cli"} for key, _ in ordered_codex_providers):
+                codex_providers = dict(sorted(ordered_codex_providers))
             else:
                 codex_providers = [
                     {

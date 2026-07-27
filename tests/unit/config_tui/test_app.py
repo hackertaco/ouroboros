@@ -569,6 +569,32 @@ async def test_execute_backend_change_clears_stale_execute_model_pin(app_env, mo
 
 
 @pytest.mark.asyncio
+async def test_env_effective_execute_backend_does_not_clear_pin_on_unrelated_stage_change(
+    app_env, monkeypatch
+) -> None:
+    """Env-overridden Execute backend must be compared with the same effective resolver."""
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {}
+    app_env.setdefault("execution", {})["default_model"] = "gpt-5"
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one(f"#stage-runtime-{Stage.INTERVIEW.value}", Select).value = "claude"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_profile.stages.interview"] == "claude"
+    assert "execution.default_model" not in captured
+
+
+@pytest.mark.asyncio
 async def test_save_uses_stage_agent_for_default_sentinel_validation(monkeypatch) -> None:
     raw = {
         "orchestrator": {"runtime_backend": "claude"},

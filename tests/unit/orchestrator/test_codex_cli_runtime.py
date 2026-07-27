@@ -156,6 +156,26 @@ def test_profile_resolution_fingerprint_preserves_codex_alias_order(
     assert first_fingerprint != second_fingerprint
 
 
+def test_profile_resolution_fingerprint_canonicalizes_single_codex_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Equivalent single Codex aliases must not cause replay fingerprint drift."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    lower = OuroborosConfig(llm_profiles={"qa": {"providers": {"codex": {"model": "gpt-5"}}}})
+    upper = OuroborosConfig(llm_profiles={"qa": {"providers": {"CODEX": {"model": "gpt-5"}}}})
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=lower):
+        lower_fingerprint = runtime._fingerprint_profile_resolution_config()
+    with patch("ouroboros.providers.profiles.load_config", return_value=upper):
+        upper_fingerprint = runtime._fingerprint_profile_resolution_config()
+
+    assert lower_fingerprint == upper_fingerprint
+
+
 class TestComposePromptDirectiveFencing:
     """System instructions and tooling must be fenced as binding directives."""
 

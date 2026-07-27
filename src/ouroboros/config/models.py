@@ -185,6 +185,23 @@ class LLMTaskProfileConfig(BaseModel, frozen=True):
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     providers: dict[str, LLMProviderProfileConfig] = Field(default_factory=dict)
 
+    @field_validator("providers")
+    @classmethod
+    def validate_provider_reasoning_efforts(
+        cls, providers: dict[str, LLMProviderProfileConfig]
+    ) -> dict[str, LLMProviderProfileConfig]:
+        """Keep Codex-only reasoning effort levels out of non-Codex providers."""
+        for provider_name, provider_config in providers.items():
+            if provider_config.reasoning_effort != "xhigh":
+                continue
+            if provider_name.strip().lower() not in {"codex", "codex_cli"}:
+                msg = (
+                    "reasoning_effort='xhigh' is only supported for Codex provider "
+                    f"profiles, not {provider_name!r}"
+                )
+                raise ValueError(msg)
+        return providers
+
 
 class ClarificationConfig(BaseModel, frozen=True):
     """Phase 0 (Big Bang) configuration.

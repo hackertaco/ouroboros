@@ -33,7 +33,7 @@ from ouroboros.cli.opencode_config import (
     is_bridge_plugin_entry,
     opencode_config_dir,
 )
-from ouroboros.codex import CODEX_RULE_FILENAME, resolve_packaged_codex_assets
+from ouroboros.codex import CODEX_RULE_FILENAME, resolve_codex_home, resolve_packaged_codex_assets
 
 app = typer.Typer(
     name="uninstall",
@@ -77,7 +77,7 @@ def _remove_claude_mcp(dry_run: bool) -> bool:
 
 def _remove_codex_mcp(dry_run: bool) -> bool:
     """Remove ouroboros MCP section from ~/.codex/config.toml."""
-    codex_config = Path.home() / ".codex" / "config.toml"
+    codex_config = resolve_codex_home() / "config.toml"
     if not codex_config.exists():
         return False
 
@@ -141,7 +141,7 @@ def _remove_codex_artifacts(dry_run: bool) -> bool:
     Returns True only if ALL existing artifacts were removed successfully.
     Returns False if any artifact could not be removed.
     """
-    codex_dir = Path.home() / ".codex"
+    codex_dir = resolve_codex_home()
     try:
         with resolve_packaged_codex_assets() as assets:
             managed_relative_paths = set(assets.managed_relative_install_paths)
@@ -431,7 +431,7 @@ def uninstall(
         except (json.JSONDecodeError, OSError):
             targets.append("MCP server registration (~/.claude/mcp.json — may be malformed)")
 
-    codex_config = Path.home() / ".codex" / "config.toml"
+    codex_config = resolve_codex_home() / "config.toml"
     try:
         if codex_config.exists() and "[mcp_servers.ouroboros]" in codex_config.read_text():
             targets.append("Codex MCP config (~/.codex/config.toml)")
@@ -447,7 +447,7 @@ def uninstall(
     except (json.JSONDecodeError, OSError):
         targets.append(f"OpenCode MCP config ({opencode_config} — may be malformed)")
 
-    codex_dir = Path.home() / ".codex"
+    codex_dir = resolve_codex_home()
     try:
         with resolve_packaged_codex_assets() as assets:
             managed_relative_paths = set(assets.managed_relative_install_paths)

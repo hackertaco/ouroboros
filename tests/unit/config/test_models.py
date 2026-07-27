@@ -281,9 +281,18 @@ class TestLLMTaskProfileConfig:
 
     def test_provider_profile_accepts_codex_native_xhigh_effort(self) -> None:
         """Codex task profiles can use their native maximum effort level."""
-        profile = LLMProviderProfileConfig(reasoning_effort="xhigh")
+        profile = LLMTaskProfileConfig(
+            providers={"codex": LLMProviderProfileConfig(reasoning_effort="xhigh")}
+        )
 
-        assert profile.reasoning_effort == "xhigh"
+        assert profile.providers["codex"].reasoning_effort == "xhigh"
+
+    def test_provider_profile_rejects_codex_native_xhigh_for_non_codex(self) -> None:
+        """Non-Codex providers must not accept Codex-only reasoning efforts."""
+        with pytest.raises(ValidationError, match="only supported for Codex"):
+            LLMTaskProfileConfig(
+                providers={"anthropic": LLMProviderProfileConfig(reasoning_effort="xhigh")}
+            )
 
 
 class TestExecutionConfig:

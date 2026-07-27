@@ -1224,7 +1224,7 @@ def _register_codex_default_profiles(*, codex_path: str | None = None) -> None:
     print_success(f"Registered Codex task profiles in {codex_config}: {', '.join(added_profiles)}")
 
 
-def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
+def _register_codex_worker_profile(*, codex_path: str | None = None) -> bool:
     """Register the managed Codex worker profile in ~/.codex/config.toml."""
     import tomllib
 
@@ -1238,7 +1238,7 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
         except (tomllib.TOMLDecodeError, ValueError) as exc:
             print_error(f"Could not parse {codex_config} — skipping worker-profile registration.")
             print_info(str(exc))
-            return
+            return False
     else:
         raw = ""
 
@@ -1260,7 +1260,7 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
         except (tomllib.TOMLDecodeError, ValueError) as exc:
             print_error(f"Could not parse {codex_config} — skipping worker-profile registration.")
             print_info(str(exc))
-            return
+            return False
 
         settings = migrated_profiles.get(_CODEX_WORKER_PROFILE_NAME, {})
         created_profile = False
@@ -1282,7 +1282,7 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
         else:
             _warn_preserved_legacy_codex_profiles(codex_config, preserved_legacy_profiles)
             print_info("Codex worker profile-v2 file already present.")
-        return
+        return True
 
     updated_raw, existed_before = _upsert_codex_worker_profile_section(raw)
     try:
@@ -1292,16 +1292,17 @@ def _register_codex_worker_profile(*, codex_path: str | None = None) -> None:
             f"Could not update {codex_config} — worker-profile registration would create invalid TOML."
         )
         print_info(str(exc))
-        return
+        return False
     if updated_raw == raw:
         print_info("Codex worker profile already up to date.")
-        return
+        return True
 
     _atomic_write_text(codex_config, updated_raw)
     if existed_before:
         print_success(f"Updated Codex worker profile in {codex_config}")
     else:
         print_success(f"Registered Codex worker profile in {codex_config}")
+    return True
 
 
 def _ensure_mapping_section(config_dict: dict, key: str) -> dict:
@@ -1519,6 +1520,35 @@ def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
     path.write_bytes(snapshot)
 
 
+def _snapshot_directory(path: Path) -> dict[Path, bytes]:
+    """Return a recursive file snapshot for rollback."""
+    snapshot: dict[Path, bytes] = {}
+    if not path.exists():
+        return snapshot
+    for child in path.rglob("*"):
+        if child.is_file():
+            snapshot[child.relative_to(path)] = child.read_bytes()
+    return snapshot
+
+
+def _restore_directory_snapshot(path: Path, snapshot: dict[Path, bytes]) -> None:
+    """Restore a directory snapshot, including files deleted during setup."""
+    if path.exists():
+        for child in sorted(path.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file() and child.relative_to(path) not in snapshot:
+                child.unlink()
+            elif child.is_dir():
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+
+    for relative_path, contents in snapshot.items():
+        target = path / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+
+
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
     from ouroboros.config.loader import ensure_config_dir, get_default_config
@@ -1559,12 +1589,15 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # Register MCP before committing Codex runtime selection.  A config.yaml that
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
-    codex_config_path = resolve_codex_home() / "config.toml"
+    codex_home = resolve_codex_home()
+    codex_config_path = codex_home / "config.toml"
+    codex_home_snapshot = _snapshot_directory(codex_home)
     codex_config_snapshot = _snapshot_file(codex_config_path)
     config_snapshot = _snapshot_file(config_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
+        _restore_directory_snapshot(codex_home, codex_home_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         print_error(f"Could not save Codex MCP config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
@@ -1578,6 +1611,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             config_path, yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
         )
     except OSError as exc:
+        _restore_directory_snapshot(codex_home, codex_home_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         print_error(f"Could not save Codex runtime config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
@@ -1607,8 +1641,10 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         if not _install_codex_artifacts():
             raise OSError("Codex artifact installation failed")
         _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
-        _register_codex_worker_profile(codex_path=codex_path)
+        if not _register_codex_worker_profile(codex_path=codex_path):
+            raise OSError("Codex worker profile registration failed")
     except (OSError, ValueError) as exc:
+        _restore_directory_snapshot(codex_home, codex_home_snapshot)
         _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
         print_error(f"Could not finish Codex setup: {exc}")

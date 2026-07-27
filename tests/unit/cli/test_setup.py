@@ -1218,6 +1218,56 @@ class TestCodexSetup:
         mock_retire.assert_not_called()
         mock_worker_profile.assert_not_called()
 
+    def test_setup_codex_rolls_back_codex_home_artifacts_when_finish_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Late setup failures must restore profile/rules/skills artifacts too."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        original_config = "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n"
+        config_path.write_text(original_config, encoding="utf-8")
+
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        original_toml = '[mcp_servers.ouroboros]\ncommand = "old"\n'
+        codex_config.write_text(original_toml, encoding="utf-8")
+        profile_path = codex_home / "ouroboros-fast.config.toml"
+        profile_contents = setup_cmd._render_codex_profile_v2_file(
+            setup_cmd._CODEX_DEFAULT_PROFILE_SECTIONS["ouroboros-fast"]
+        )
+        profile_path.write_text(profile_contents, encoding="utf-8")
+
+        def _install_artifacts() -> bool:
+            (codex_home / "rules").mkdir()
+            (codex_home / "rules" / "ouroboros.md").write_text("new rule\n", encoding="utf-8")
+            (codex_home / "skills").mkdir()
+            (codex_home / "skills" / "welcome.md").write_text("new skill\n", encoding="utf-8")
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._install_codex_artifacts",
+                side_effect=_install_artifacts,
+            ),
+            patch("ouroboros.cli.commands.setup._codex_uses_profile_v2", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                return_value=False,
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.read_text(encoding="utf-8") == original_config
+        assert codex_config.read_text(encoding="utf-8") == original_toml
+        assert profile_path.read_text(encoding="utf-8") == profile_contents
+        assert not (codex_home / "rules" / "ouroboros.md").exists()
+        assert not (codex_home / "skills" / "welcome.md").exists()
+
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path
     ) -> None:

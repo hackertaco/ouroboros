@@ -818,13 +818,7 @@ class SettingsApp(App[None]):
             key.startswith("orchestrator.runtime_profile.stages.") for key in changes
         )
         if routing_changed:
-            old_profile_default = get_value(self._raw, "orchestrator.runtime_profile.default")
-            old_execute_backend = _canonical_backend(
-                get_value(self._raw, f"orchestrator.runtime_profile.stages.{Stage.EXECUTE.value}")
-                or old_profile_default
-                or get_value(self._raw, GLOBAL_RUNTIME_FIELD.key)
-                or get_value(self._defaults, GLOBAL_RUNTIME_FIELD.key)
-            )
+            old_execute_backend = _canonical_backend(self._effective_stage_backend(Stage.EXECUTE))
             new_execute_backend = _canonical_backend(self._selected_runtime(Stage.EXECUTE))
             if (
                 old_execute_backend != new_execute_backend
