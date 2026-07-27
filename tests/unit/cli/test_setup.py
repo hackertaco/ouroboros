@@ -4692,8 +4692,9 @@ class TestNonInteractiveAutoSelect:
         def _claude(path: str) -> None:
             chosen["selected"] = "claude"
 
-        def _codex(path: str, **kwargs) -> None:
+        def _codex(path: str, **kwargs) -> bool:
             chosen["selected"] = "codex"
+            return True
 
         def _hermes(path: str) -> None:
             chosen["selected"] = "hermes"
