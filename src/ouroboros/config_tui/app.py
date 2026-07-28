@@ -737,7 +737,12 @@ class SettingsApp(App[None]):
         model_select = self.query_one(f"#stage-model-{stage.value}", Select)
         current = model_select.value
         current_str = None if _is_blank(current) else str(current)
-        keep = current_str if current_str and current_str in self._all_models(backend) else None
+        known_models = self._all_models(backend)
+        saved_backend = _canonical_backend(self._saved_stage_backend_from_raw(stage))
+        backend_unchanged = _canonical_backend(backend) == saved_backend
+        keep = None
+        if current_str and (current_str in known_models or backend_unchanged):
+            keep = current_str
         options = self._model_options(backend, keep)
         model_select.set_options(options)
         concrete = [v for _, v in options if v not in (SEARCH_SENTINEL, CUSTOM_SENTINEL)]
@@ -888,6 +893,9 @@ class SettingsApp(App[None]):
                             changes[model_field.key] = None
                         continue
                     record(model_field.key, model_text)
+                elif stage.value in self._explicit_stage_model_changes:
+                    if get_value(self._raw, model_field.key) is not None:
+                        changes[model_field.key] = None
 
         for field in ADVANCED_MODEL_FIELDS:
             raw_value = self.query_one(f"#adv-{_slug(field.key)}", Input).value.strip()

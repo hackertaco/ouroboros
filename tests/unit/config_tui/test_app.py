@@ -682,6 +682,57 @@ async def test_env_effective_execute_backend_does_not_clear_pin_on_unrelated_sta
 
 
 @pytest.mark.asyncio
+async def test_open_save_preserves_unlisted_custom_execute_model(app_env, monkeypatch) -> None:
+    """A valid custom Codex model must not be erased just because it is not listed."""
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"execute": "codex"}
+    app_env.setdefault("execution", {})["default_model"] = "my-private-codex-model"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"codex": "/bin/codex"},
+    )
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.refresh_models",
+        lambda _backend: ["gpt-5", "gpt-5-codex"],
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert (
+            pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select).value
+            == "my-private-codex-model"
+        )
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert "execution.default_model" not in captured
+
+
+@pytest.mark.asyncio
+async def test_explicit_blank_execute_model_clears_saved_pin(app_env, monkeypatch) -> None:
+    """The blank Select state is an explicit request to clear the saved Execute pin."""
+    app_env.setdefault("execution", {})["default_model"] = "claude-sonnet-4-6"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        select = pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select)
+        select.value = Select.NULL
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["execution.default_model"] is None
+
+
+@pytest.mark.asyncio
 async def test_save_reconciles_models_against_post_save_backend_under_env_override(
     app_env, monkeypatch
 ) -> None:

@@ -336,6 +336,11 @@ _CODEX_MCP_COMMENT_LINES = (
 CodexMcpMode = Literal["auto", "preserve", "stdio"]
 _CODEX_APP_CLI_PATH = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
 _CODEX_UVX_MCP_ARGS = ["--from", "ouroboros-ai[mcp]", "ouroboros", "mcp", "serve"]
+_CODEX_LEGACY_UVX_MCP_ARGS: tuple[tuple[str, ...], ...] = (
+    tuple(_CODEX_UVX_MCP_ARGS),
+    ("--from", "ouroboros-ai", "ouroboros", "mcp", "serve"),
+    ("ouroboros", "mcp", "serve"),
+)
 _CODEX_DIRECT_MCP_ARGS = ["mcp", "serve", "--runtime", "codex", "--llm-backend", "codex"]
 _CODEX_MODULE_MCP_ARGS = ["-m", "ouroboros", *_CODEX_DIRECT_MCP_ARGS]
 _CODEX_PROFILE_COMMENT = (
@@ -572,13 +577,10 @@ def _is_setup_managed_codex_mcp_entry(
     if not isinstance(command, str) or not isinstance(args, list):
         return False
 
-    # Current and legacy setup-managed uvx configs both end by launching
-    # `ouroboros mcp serve`; keep accepting those even before setup added the
-    # managed comment block. Non-uvx dev/worktree shapes are only setup-owned
-    # when that managed comment is present, so user-pinned interpreters or
-    # wrapper scripts with the same args remain preserved in auto mode.
     if command == "uvx":
-        return len(args) >= 3 and args[-3:] == ["ouroboros", "mcp", "serve"]
+        if has_managed_comment:
+            return len(args) >= 3 and args[-3:] == ["ouroboros", "mcp", "serve"]
+        return tuple(str(arg) for arg in args) in _CODEX_LEGACY_UVX_MCP_ARGS
     if not has_managed_comment:
         return False
     if Path(command).name == "ouroboros":
@@ -1756,8 +1758,8 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # setup in a false-success state.
     codex_home = resolve_codex_home()
     managed_codex_snapshot = _snapshot_managed_codex_setup_paths(codex_home)
-    config_snapshot = _snapshot_file(config_path)
-    credentials_snapshot = _snapshot_file(credentials_path)
+    config_snapshot = _snapshot_path(config_path)
+    credentials_snapshot = _snapshot_path(credentials_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
@@ -1782,8 +1784,8 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             credentials_path.chmod(0o600)
     except OSError as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_file_snapshot(config_path, config_snapshot)
-        _restore_file_snapshot(credentials_path, credentials_snapshot)
+        _restore_path_snapshot(config_path, config_snapshot)
+        _restore_path_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not save Codex runtime config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
         return False
@@ -1816,8 +1818,8 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             raise OSError("Codex worker profile registration failed")
     except (OSError, ValueError) as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_file_snapshot(config_path, config_snapshot)
-        _restore_file_snapshot(credentials_path, credentials_snapshot)
+        _restore_path_snapshot(config_path, config_snapshot)
+        _restore_path_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not finish Codex setup: {exc}")
         print_info("Restored Codex and Ouroboros config; setup incomplete.")
         return False

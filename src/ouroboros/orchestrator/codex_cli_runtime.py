@@ -310,6 +310,8 @@ class CodexCliRuntime:
             # checks them again before consulting any role-dependent fallback.
             self._profile_resolution_fingerprint = self._fingerprint_profile_resolution_config()
             self._codex_config_fingerprint = self._fingerprint_codex_config_files()
+            self._cli_executable_path_identity = self._cli_executable_identity()
+            self._cli_executable_version_identity_snapshot = self._cli_executable_version_identity()
             self._runtime_handle_profile_fingerprints: dict[str, str] = {}
             self._runtime_handle_codex_config_fingerprints: dict[str, str] = {}
         else:
@@ -321,6 +323,8 @@ class CodexCliRuntime:
             self._resolved_fallback_reasoning_effort = None
             self._profile_resolution_fingerprint = None
             self._codex_config_fingerprint = None
+            self._cli_executable_path_identity = None
+            self._cli_executable_version_identity_snapshot = None
             self._runtime_handle_profile_fingerprints = {}
             self._runtime_handle_codex_config_fingerprints = {}
         self._builtin_mcp_handlers: dict[str, Any] | None = None
@@ -890,6 +894,21 @@ class CodexCliRuntime:
             return
         raise RuntimeError(
             "Codex configuration changed after runtime initialization; "
+            "start a new execution session"
+        )
+
+    def _assert_cli_executable_identity_unchanged(self) -> None:
+        """Fail closed if the selected Codex executable changed in place."""
+        if self._runtime_backend != "codex":
+            return
+        if (
+            self._cli_executable_identity() == self._cli_executable_path_identity
+            and self._cli_executable_version_identity()
+            == self._cli_executable_version_identity_snapshot
+        ):
+            return
+        raise RuntimeError(
+            "Codex CLI executable changed after runtime initialization; "
             "start a new execution session"
         )
 
@@ -1665,6 +1684,7 @@ class CodexCliRuntime:
         if runtime_handle is not None:
             self._assert_profile_resolution_config_unchanged(runtime_handle)
         self._assert_codex_config_files_unchanged(runtime_handle)
+        self._assert_cli_executable_identity_unchanged()
         command = [self._cli_path, "exec"]
 
         normalized_model = self._normalize_model(model or self._model)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 from ouroboros.skills.artifacts import resolve_packaged_skills_dir
 
@@ -123,9 +124,9 @@ def test_first_use_onboarding_has_host_specific_model_settings_handoffs() -> Non
     )
 
 
-def _run_setup_gate(script: str, *, home: Path, codex_home: Path | None = None) -> str:
+def _run_setup_gate(script: str, *, home: Path, codex_home: Path | str | None = None) -> str:
     """Run the packaged setup gate exactly as a host executes its Markdown snippet."""
-    env = {"HOME": str(home)}
+    env = {"HOME": str(home), "OUROBOROS_WELCOME_PYTHON": sys.executable}
     if codex_home is not None:
         env["CODEX_HOME"] = str(codex_home)
     return subprocess.run(
@@ -181,6 +182,29 @@ def test_codex_setup_gate_accepts_yaml_flow_mappings(tmp_path: Path) -> None:
     gate = skill[start : skill.index("\n```", start)]
 
     assert _run_setup_gate(gate, home=tmp_path, codex_home=codex_home) == "CODEX_READY"
+
+
+def test_codex_setup_gate_expands_tilde_codex_home(tmp_path: Path) -> None:
+    """CODEX_HOME may use shell-style ~/ paths and still point at the active config."""
+    repo_root = Path(__file__).resolve().parents[3]
+    codex_home = tmp_path / "codex-alt"
+    config_path = tmp_path / ".ouroboros" / "config.yaml"
+    config_path.parent.mkdir()
+    codex_home.mkdir()
+    config_path.write_text(
+        "orchestrator: {runtime_backend: codex}\nllm: {backend: codex}\n",
+        encoding="utf-8",
+    )
+    (codex_home / "config.toml").write_text(
+        '[mcp_servers.ouroboros]\ncommand = "ouroboros"\n',
+        encoding="utf-8",
+    )
+    skill = (repo_root / "skills" / "welcome" / "SKILL.md").read_text(encoding="utf-8")
+    setup_gate_start = skill.index("### Setup Gate: First Use")
+    start = skill.index("CODEX_HOME_DIR=", setup_gate_start)
+    gate = skill[start : skill.index("\n```", start)]
+
+    assert _run_setup_gate(gate, home=tmp_path, codex_home="~/codex-alt") == "CODEX_READY"
 
 
 def test_codex_completed_welcome_precheck_accepts_yaml_flow_mappings(
@@ -270,7 +294,9 @@ def test_codex_legacy_gpt5_migration_gate_only_targets_the_old_all_stage_default
     )
     skill = (repo_root / "skills" / "welcome" / "SKILL.md").read_text(encoding="utf-8")
     migration_start = skill.index("### Legacy Codex Model Migration")
-    start = skill.index('if python3 - "$HOME/.ouroboros/config.yaml"', migration_start)
+    start = skill.index(
+        'if $OUROBOROS_WELCOME_PYTHON - "$HOME/.ouroboros/config.yaml"', migration_start
+    )
     gate = skill[start : skill.index("\n```", start)]
 
     assert (

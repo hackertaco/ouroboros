@@ -467,6 +467,24 @@ class TestCodexSetup:
         assert 'command = "/tmp/ouroboros/.venv/bin/ouroboros"' in contents
         assert 'command = "uvx"' not in contents
 
+    def test_register_codex_mcp_server_preserves_user_pinned_uvx_from(self, tmp_path: Path) -> None:
+        """A user-pinned uvx --from fork is not a setup-owned legacy entry."""
+        codex_config = tmp_path / ".codex" / "config.toml"
+        codex_config.parent.mkdir(parents=True)
+        codex_config.write_text(
+            "[mcp_servers.ouroboros]\n"
+            'command = "uvx"\n'
+            'args = ["--from", "/opt/private/ouroboros-fork", "ouroboros", "mcp", "serve"]\n',
+            encoding="utf-8",
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            setup_cmd._register_codex_mcp_server()
+
+        contents = codex_config.read_text(encoding="utf-8")
+        assert "/opt/private/ouroboros-fork" in contents
+        assert "ouroboros-ai[mcp]" not in contents
+
     def test_register_codex_mcp_server_stdio_mode_replaces_url_config(
         self,
         tmp_path: Path,
@@ -1827,6 +1845,39 @@ class TestCodexSetup:
             setup_cmd._setup_codex("/usr/local/bin/codex")
 
         mock_claude.assert_not_called()
+
+    def test_setup_codex_restores_dangling_config_symlink_on_late_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Late setup rollback must preserve config.yaml symlink topology."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        config_target = tmp_path / "missing-config-target.yaml"
+        config_path.symlink_to(config_target)
+        credentials_path = config_dir / "credentials.yaml"
+        credentials_target = tmp_path / "missing-credentials-target.yaml"
+        credentials_path.symlink_to(credentials_target)
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts", return_value=True),
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles"),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                side_effect=OSError("worker failed"),
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.is_symlink()
+        assert os.readlink(config_path) == str(config_target)
+        assert not config_target.exists()
+        assert credentials_path.is_symlink()
+        assert os.readlink(credentials_path) == str(credentials_target)
+        assert not credentials_target.exists()
 
 
 class TestClaudeSetup:

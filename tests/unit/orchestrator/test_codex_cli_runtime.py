@@ -85,6 +85,28 @@ def test_codex_config_fingerprint_still_detects_project_runtime_overrides(
         runtime._assert_codex_config_files_unchanged()
 
 
+def test_build_command_rejects_in_place_codex_cli_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Durable Codex identity must fail closed if the selected executable changes."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    cli_path = tmp_path / "codex"
+    cli_path.write_text("#!/bin/sh\necho codex 1.0\n", encoding="utf-8")
+    cli_path.chmod(0o755)
+
+    runtime = CodexCliRuntime(cli_path=cli_path, cwd="/tmp/project", model="gpt-5")
+    assert runtime._build_command("/tmp/last-message")
+
+    cli_path.write_text("#!/bin/sh\necho codex 2.0\n", encoding="utf-8")
+    cli_path.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="Codex CLI executable changed"):
+        runtime._build_command("/tmp/last-message")
+
+
 def test_codex_config_fingerprint_ignores_unreachable_embedded_profiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

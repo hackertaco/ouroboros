@@ -19,6 +19,25 @@ Interactive onboarding for new Ouroboros users.
 
 When this skill is invoked, follow this flow:
 
+Before running any shell snippets below, choose a Python command without
+assuming a system `python3` binary. Marketplace installs require `uvx`, not a
+global Python executable:
+
+```bash
+if [ -z "${OUROBOROS_WELCOME_PYTHON:-}" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    OUROBOROS_WELCOME_PYTHON="python3"
+  elif command -v python >/dev/null 2>&1; then
+    OUROBOROS_WELCOME_PYTHON="python"
+  elif command -v uv >/dev/null 2>&1; then
+    OUROBOROS_WELCOME_PYTHON="uv run --quiet python"
+  else
+    echo "Ouroboros welcome requires python3, python, or uv to inspect local setup."
+    exit 1
+  fi
+fi
+```
+
 ---
 
 ### Pre-Check: Already Completed?
@@ -29,7 +48,7 @@ First, check `~/.ouroboros/prefs.json` for `welcomeCompleted`. For upgrades from
 PREFFILE="$HOME/.ouroboros/prefs.json"
 
 if [ -f "$PREFFILE" ]; then
-  WELCOME_COMPLETED=$(python3 - <<'PY'
+  WELCOME_COMPLETED=$($OUROBOROS_WELCOME_PYTHON - <<'PY'
 import json, os
 path = os.path.expanduser('~/.ouroboros/prefs.json')
 try:
@@ -41,7 +60,7 @@ if not isinstance(prefs, dict):
 print(prefs.get('welcomeCompleted') or ('legacy-welcomeShown' if prefs.get('welcomeShown') else ''))
 PY
 )
-  WELCOME_VERSION=$(python3 - <<'PY'
+  WELCOME_VERSION=$($OUROBOROS_WELCOME_PYTHON - <<'PY'
 import json, os
 path = os.path.expanduser('~/.ouroboros/prefs.json')
 try:
@@ -66,7 +85,11 @@ user who chose **나중에** or whose setup was later removed:
 
 ```bash
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-if python3 - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
+case "$CODEX_HOME_DIR" in
+  "~") CODEX_HOME_DIR="$HOME" ;;
+  "~/"*) CODEX_HOME_DIR="$HOME/${CODEX_HOME_DIR#"~/"}" ;;
+esac
+if $OUROBOROS_WELCOME_PYTHON - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
 from __future__ import annotations
 
 import re
@@ -209,7 +232,7 @@ possible user pin. Instead, when Codex is ready, detect that exact legacy
 shape once before honoring the welcome-completed marker:
 
 ```bash
-if python3 - "$HOME/.ouroboros/config.yaml" "$HOME/.ouroboros/prefs.json" <<'PY'
+if $OUROBOROS_WELCOME_PYTHON - "$HOME/.ouroboros/config.yaml" "$HOME/.ouroboros/prefs.json" <<'PY'
 from __future__ import annotations
 
 import json
@@ -305,7 +328,7 @@ For either completed choice, merge exactly one marker into
 `~/.ouroboros/prefs.json` without deleting existing keys:
 
 ```bash
-python3 - "automatic-v1" <<'PY'
+$OUROBOROS_WELCOME_PYTHON - "automatic-v1" <<'PY'
 import json, os, sys
 path = os.path.expanduser('~/.ouroboros/prefs.json')
 try:
@@ -351,7 +374,7 @@ completion prompt and continue to the Setup Gate below.
 **If `--skip` flag present:**
 - Merge `welcomeShown: true`, `welcomeCompleted: <current timestamp>`, and `welcomeVersion` into `~/.ouroboros/prefs.json` without deleting existing keys:
   ```bash
-python3 - <<'PY'
+$OUROBOROS_WELCOME_PYTHON - <<'PY'
 import json, os
 from datetime import UTC, datetime
 path = os.path.expanduser('~/.ouroboros/prefs.json')
@@ -390,7 +413,11 @@ or another runtime.
 
 ```bash
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-if python3 - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
+case "$CODEX_HOME_DIR" in
+  "~") CODEX_HOME_DIR="$HOME" ;;
+  "~/"*) CODEX_HOME_DIR="$HOME/${CODEX_HOME_DIR#"~/"}" ;;
+esac
+if $OUROBOROS_WELCOME_PYTHON - "$HOME/.ouroboros/config.yaml" "$CODEX_HOME_DIR/config.toml" <<'PY'
 from __future__ import annotations
 
 import re
@@ -723,7 +750,7 @@ gh auth status &>/dev/null && echo "GH_OK" || echo "GH_MISSING"
 - **Star on GitHub**: `gh api -X PUT /user/starred/Q00/ouroboros`
 - Both choices: merge the welcome completion fields into `~/.ouroboros/prefs.json` without deleting existing keys. Set `star_asked: true` after either star prompt choice so the star prompt is not repeated:
   ```bash
-python3 - <<'PY'
+$OUROBOROS_WELCOME_PYTHON - <<'PY'
 import json, os
 from datetime import UTC, datetime
 path = os.path.expanduser('~/.ouroboros/prefs.json')
@@ -750,7 +777,7 @@ PY
 **If `GH_MISSING` or `star_asked` is true:**
 Merge the welcome completion fields into `~/.ouroboros/prefs.json` without deleting existing keys:
   ```bash
-python3 - <<'PY'
+$OUROBOROS_WELCOME_PYTHON - <<'PY'
 import json, os
 from datetime import UTC, datetime
 path = os.path.expanduser('~/.ouroboros/prefs.json')
