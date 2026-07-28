@@ -651,8 +651,8 @@ All environment variables have higher priority than the corresponding `config.ya
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OUROBOROS_EXECUTION_MODEL` | `null` (runtime default) | Model used for agent execution inside the MCP evolve loop. Only applicable when the Claude runtime is active. |
-| `OUROBOROS_VALIDATION_MODEL` | `null` (runtime default) | Model used for import/validation fix passes during MCP evolution. Only applicable when the Claude runtime is active. |
+| `OUROBOROS_EXECUTION_MODEL` | `null` (runtime default) | Model used for agent execution inside the MCP evolve loop. Applies to runtimes that expose a per-call model override; unset it to preserve automatic runtime selection. |
+| `OUROBOROS_VALIDATION_MODEL` | `null` (runtime default) | Model used for import/validation fix passes during MCP evolution. Applies to runtimes that expose a per-call model override; unset it to preserve automatic runtime selection. |
 | `OUROBOROS_EVOLVE_STAGE1` | `"false"` | Set to `"true"` to enable Stage 1 mechanical checks (lint/build/test) during MCP evolution. |
 | `OUROBOROS_MCP_TOOL_TIMEOUT_SECONDS` | `runtime_controls.mcp_tool_timeout_seconds` | Adapter-level MCP timeout for progress-aware tools. `0` disables the wall-clock cap. |
 | `OUROBOROS_GENERATION_IDLE_TIMEOUT_SECONDS` | `runtime_controls.generation_idle_timeout_seconds` | Idle timeout when no generation/execution activity is observed. |

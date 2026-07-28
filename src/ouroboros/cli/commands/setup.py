@@ -190,7 +190,7 @@ def _detect_runtimes() -> dict[str, str | None]:
     # would still select the broken env path.
     env_codex_path = os.environ.get("OUROBOROS_CODEX_CLI_PATH", "").strip()
     if env_codex_path:
-        configured = Path(env_codex_path).expanduser()
+        configured = Path(env_codex_path).expanduser().resolve(strict=False)
         runtimes["codex"] = (
             str(configured) if configured.is_file() and os.access(configured, os.X_OK) else None
         )
@@ -204,7 +204,7 @@ def _detect_runtimes() -> dict[str, str | None]:
         except Exception:
             codex_path = None
         if codex_path:
-            configured = Path(codex_path).expanduser()
+            configured = Path(codex_path).expanduser().resolve(strict=False)
             if configured.is_file() and os.access(configured, os.X_OK):
                 runtimes["codex"] = str(configured)
 

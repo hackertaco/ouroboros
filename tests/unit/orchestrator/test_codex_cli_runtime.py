@@ -256,6 +256,30 @@ def test_profile_fingerprint_tracks_reachable_ouroboros_profile() -> None:
         assert runtime._fingerprint_profile_resolution_config() != original
 
 
+def test_profile_fingerprint_tracks_runtime_profile_role_mapping_when_backend_profile_set() -> None:
+    """Runtime-profile sessions still re-resolve role profiles for child handles."""
+    first = OuroborosConfig(
+        llm_profiles={
+            "worker": {"providers": {"codex": {"profile": "ouroboros-worker"}}},
+            "standard": {"providers": {"codex": {"reasoning_effort": "low"}}},
+        },
+        llm_role_profiles={"agent_runtime_implementation": "standard"},
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "worker": {"providers": {"codex": {"profile": "ouroboros-worker"}}},
+            "standard": {"providers": {"codex": {"reasoning_effort": "high"}}},
+        },
+        llm_role_profiles={"agent_runtime_implementation": "standard"},
+    )
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project", runtime_profile="worker")
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        original = runtime._fingerprint_profile_resolution_config()
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        assert runtime._fingerprint_profile_resolution_config() != original
+
+
 def test_profile_resolution_fingerprint_preserves_codex_alias_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

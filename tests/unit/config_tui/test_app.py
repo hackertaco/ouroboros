@@ -576,9 +576,12 @@ async def test_env_runtime_override_syncs_llm_backend_to_staged_global_selection
 
 
 @pytest.mark.asyncio
-async def test_execute_backend_change_clears_stale_execute_model_pin(app_env, monkeypatch) -> None:
-    """Changing Execute's effective backend must not preserve an incompatible hidden pin."""
-    app_env.setdefault("execution", {})["default_model"] = "gpt-5"
+async def test_execute_backend_change_to_codex_clears_stale_execute_model_pin(
+    app_env, monkeypatch
+) -> None:
+    """Codex automatic mode is persisted by clearing the old concrete Execute pin."""
+    app_env["orchestrator"]["runtime_profile"]["stages"]["execute"] = "claude"
+    app_env.setdefault("execution", {})["default_model"] = "claude-opus-4-8"
     captured: dict[str, object] = {}
     monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
     monkeypatch.setattr(
@@ -588,12 +591,12 @@ async def test_execute_backend_change_clears_stale_execute_model_pin(app_env, mo
 
     app = SettingsApp()
     async with app.run_test() as pilot:
-        pilot.app.query_one(f"#stage-runtime-{Stage.EXECUTE.value}", Select).value = "claude"
+        pilot.app.query_one(f"#stage-runtime-{Stage.EXECUTE.value}", Select).value = "codex"
         await pilot.pause()
         pilot.app.action_save()
         await pilot.pause()
 
-    assert captured["orchestrator.runtime_profile.stages.execute"] == "claude"
+    assert captured["orchestrator.runtime_profile.stages.execute"] == "codex"
     assert captured["execution.default_model"] is None
 
 
@@ -623,6 +626,33 @@ async def test_execute_backend_change_preserves_replacement_execute_model(
 
     assert captured["orchestrator.runtime_profile.stages.execute"] == "claude"
     assert captured["execution.default_model"] == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_execute_backend_change_persists_displayed_automatic_model(
+    app_env, monkeypatch
+) -> None:
+    """If a backend switch displays a concrete model, Save must persist that same value."""
+    app_env.setdefault("execution", {})["default_model"] = "gpt-5"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one(f"#stage-runtime-{Stage.EXECUTE.value}", Select).value = "claude"
+        await pilot.pause()
+        displayed = pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select).value
+        assert displayed == "claude-opus-4-8"
+
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_profile.stages.execute"] == "claude"
+    assert captured["execution.default_model"] == "claude-opus-4-8"
 
 
 @pytest.mark.asyncio

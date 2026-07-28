@@ -821,12 +821,23 @@ class SettingsApp(App[None]):
                         record(model_field.key, custom)
                 elif not _is_blank(model_value):
                     automatic_model = self._automatic_stage_model_values.get(stage.value)
-                    if stage is Stage.EXECUTE and (
-                        stage.value not in self._explicit_stage_model_changes
-                        or (automatic_model is not None and str(model_value) == automatic_model)
+                    if (
+                        stage is Stage.EXECUTE
+                        and stage.value not in self._explicit_stage_model_changes
+                        and automatic_model is not None
+                        and str(model_value) == automatic_model
+                        and uses_default_model_sentinel(self._selected_runtime(stage))
                     ):
                         continue
                     model_text = str(model_value)
+                    if (
+                        stage is Stage.EXECUTE
+                        and model_text == DEFAULT_MODEL_SENTINEL
+                        and uses_default_model_sentinel(self._selected_runtime(stage))
+                    ):
+                        if get_value(self._raw, model_field.key) is not None:
+                            changes[model_field.key] = None
+                        continue
                     if model_text == DEFAULT_MODEL_SENTINEL and not uses_default_model_sentinel(
                         self._selected_runtime(stage)
                     ):
@@ -853,6 +864,7 @@ class SettingsApp(App[None]):
             if (
                 old_execute_backend != new_execute_backend
                 and get_value(self._raw, "execution.default_model") is not None
+                and "execution.default_model" not in changes
                 and (
                     Stage.EXECUTE.value not in self._explicit_stage_model_changes
                     or (

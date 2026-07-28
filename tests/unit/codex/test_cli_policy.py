@@ -177,6 +177,27 @@ class TestResolveCodexCliPath:
             {"wrapper_path": str(wrapper)},
         )
 
+    def test_canonicalizes_relative_configured_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Configured relative paths must not depend on a later execution cwd."""
+        cli = tmp_path / "tools" / "codex"
+        cli.parent.mkdir()
+        cli = _write_script(cli)
+        logger = _FakeLogger()
+
+        monkeypatch.chdir(tmp_path)
+
+        resolution = resolve_codex_cli_path(
+            explicit_cli_path=None,
+            configured_cli_path="tools/codex",
+            logger=logger,
+            log_namespace="codex_cli_runtime",
+        )
+
+        assert resolution.cli_path == str(cli)
+        assert resolution.candidate_path == str(cli)
+
 
 class TestBuildCodexChildEnv:
     def test_strips_recursive_markers_and_increments_depth(self) -> None:

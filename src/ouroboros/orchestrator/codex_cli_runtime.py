@@ -626,15 +626,14 @@ class CodexCliRuntime:
         relevant_profile_names: set[str] = set()
         if isinstance(self._runtime_profile, str) and self._runtime_profile.strip():
             relevant_profile_names.add(self._runtime_profile.strip())
-        else:
-            for role, role_profile in sorted(config.llm_role_profiles.items()):
-                if role != _RUNTIME_PROFILE_ROLE_PREFIX and not role.startswith(
-                    f"{_RUNTIME_PROFILE_ROLE_PREFIX}_"
-                ):
-                    continue
-                if role_profile:
-                    relevant_role_profiles[role] = role_profile
-                    relevant_profile_names.add(role_profile)
+        for role, role_profile in sorted(config.llm_role_profiles.items()):
+            if role != _RUNTIME_PROFILE_ROLE_PREFIX and not role.startswith(
+                f"{_RUNTIME_PROFILE_ROLE_PREFIX}_"
+            ):
+                continue
+            if role_profile:
+                relevant_role_profiles[role] = role_profile
+                relevant_profile_names.add(role_profile)
 
         profiles: dict[str, object] = {}
         for name, profile in sorted(config.llm_profiles.items()):

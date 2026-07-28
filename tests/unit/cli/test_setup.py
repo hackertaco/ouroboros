@@ -92,6 +92,25 @@ class TestCodexSetup:
 
         assert detected["codex"] == str(configured)
 
+    def test_detect_runtimes_canonicalizes_relative_codex_cli_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setup must not persist a workspace-relative Codex executable path."""
+        configured = tmp_path / "tools" / "codex"
+        configured.parent.mkdir(parents=True)
+        configured.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        configured.chmod(0o755)
+
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("ouroboros.cli.commands.setup.shutil.which", return_value=None),
+            patch("ouroboros.config.get_codex_cli_path", return_value="tools/codex"),
+            patch("ouroboros.cli.commands.setup._CODEX_APP_CLI_PATH", tmp_path / "app-codex"),
+        ):
+            detected = setup_cmd._detect_runtimes()
+
+        assert detected["codex"] == str(configured)
+
     def test_detect_runtimes_rejects_stale_codex_env_before_path(self, tmp_path: Path) -> None:
         """A stale Codex env path must not be hidden by a valid PATH binary."""
         path_codex = tmp_path / "path" / "codex"

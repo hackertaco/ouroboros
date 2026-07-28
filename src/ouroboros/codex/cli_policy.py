@@ -54,9 +54,13 @@ def resolve_codex_cli_path(
     Zeude shim), prefer the next real ``codex`` binary on ``PATH`` instead.
     """
     if explicit_cli_path is not None:
-        candidate = str(Path(explicit_cli_path).expanduser())
+        candidate = _normalize_cli_path_candidate(str(explicit_cli_path))
     else:
-        candidate = configured_cli_path or _which(default_cli_name) or default_cli_name
+        candidate = (
+            _normalize_cli_path_candidate(configured_cli_path)
+            if configured_cli_path
+            else _which(default_cli_name) or default_cli_name
+        )
 
     path = Path(candidate).expanduser()
     if not path.exists():
@@ -159,6 +163,18 @@ def _which(name: str) -> str | None:
     import shutil
 
     return shutil.which(name)
+
+
+def _normalize_cli_path_candidate(candidate: str | None) -> str | None:
+    """Return a durable CLI path candidate for persisted or explicit overrides."""
+    if candidate is None:
+        return None
+    expanded = Path(candidate).expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    if os.sep in candidate or (os.altsep is not None and os.altsep in candidate):
+        return str(expanded.resolve(strict=False))
+    return candidate
 
 
 __all__ = [
