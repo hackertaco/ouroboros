@@ -663,11 +663,10 @@ class CodexCliRuntime:
 
         # Runtime handles may select `llm_profile` directly through metadata.
         # After runtime recreation the process-local handle cache is empty, so
-        # the durable identity must already cover every Codex-capable profile a
-        # later handle can name.
-        for name, profile in config.llm_profiles.items():
-            if any(key.strip().lower() in {"codex", "codex_cli"} for key in profile.providers):
-                relevant_profile_names.add(name)
+        # the durable identity must already cover every handle-selectable
+        # semantic profile, including provider-neutral profiles that only carry
+        # top-level model / reasoning settings and no Codex provider mapping.
+        relevant_profile_names.update(config.llm_profiles)
 
         profiles: dict[str, object] = {}
         for name, profile in sorted(config.llm_profiles.items()):
@@ -794,19 +793,7 @@ class CodexCliRuntime:
             except OSError as exc:
                 raise RuntimeError("Cannot read Codex profile configuration") from exc
             if name == "config.toml":
-                contents = self._stable_global_codex_config_bytes(
-                    contents,
-                    reachable_profiles={
-                        profile
-                        for profile in (
-                            self._codex_profile,
-                            self._resolved_fallback_profile,
-                            handle_native_profile,
-                            handle_resolved_profile,
-                        )
-                        if isinstance(profile, str) and profile.strip()
-                    },
-                )
+                contents = self._stable_global_codex_config_bytes(contents)
             digest.update(contents)
             digest.update(b"\0")
         return digest.hexdigest()
@@ -848,15 +835,11 @@ class CodexCliRuntime:
 
         profiles = parsed.get("profiles")
         if isinstance(profiles, dict):
-            resolved_reachable_profiles = reachable_profiles or {
-                profile
-                for profile in (self._codex_profile, self._resolved_fallback_profile)
-                if isinstance(profile, str) and profile.strip()
-            }
+            resolved_reachable_profiles = reachable_profiles
             retained_profiles = {
                 str(name): settings
                 for name, settings in profiles.items()
-                if str(name) in resolved_reachable_profiles
+                if resolved_reachable_profiles is None or str(name) in resolved_reachable_profiles
             }
             if retained_profiles:
                 parsed["profiles"] = retained_profiles

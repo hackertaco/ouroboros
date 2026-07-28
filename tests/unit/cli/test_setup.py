@@ -2065,6 +2065,7 @@ class TestClaudeSetup:
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
             patch("ouroboros.cli.commands.setup.shutil.which", side_effect=which_side_effect),
+            patch("ouroboros.cli.commands.setup.subprocess.run"),
         ):
             setup_cmd._setup_claude("/usr/local/bin/claude")
 

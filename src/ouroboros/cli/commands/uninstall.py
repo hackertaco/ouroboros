@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import tomllib
 from typing import Annotated
 
 import typer
@@ -77,6 +78,12 @@ def _remove_claude_mcp(dry_run: bool) -> bool:
 
 def _remove_codex_mcp(dry_run: bool) -> bool:
     """Remove ouroboros MCP section from ~/.codex/config.toml."""
+    from ouroboros.cli.commands.setup import (
+        _codex_mcp_entry_from_toml,
+        _has_managed_codex_mcp_comment,
+        _is_setup_managed_codex_mcp_entry,
+    )
+
     codex_config = resolve_codex_home() / "config.toml"
     if not codex_config.exists():
         return False
@@ -87,6 +94,21 @@ def _remove_codex_mcp(dry_run: bool) -> bool:
         print_warning("~/.codex/config.toml is unreadable — skipping.")
         return False
     if "[mcp_servers.ouroboros]" not in raw:
+        return False
+
+    try:
+        parsed = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        print_warning("~/.codex/config.toml is malformed — skipping Codex MCP removal.")
+        return False
+    entry = _codex_mcp_entry_from_toml(parsed)
+    if entry is None:
+        return False
+    if not _is_setup_managed_codex_mcp_entry(
+        entry,
+        has_managed_comment=_has_managed_codex_mcp_comment(raw),
+    ):
+        print_info("Preserved user-managed Ouroboros MCP config in ~/.codex/config.toml")
         return False
 
     if dry_run:

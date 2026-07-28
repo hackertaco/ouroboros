@@ -353,6 +353,70 @@ def _normalize_stage_model_for_display(
     return _display_stage_model(normalized_model, normalized_source, runtime_backend)
 
 
+def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: str) -> str:
+    """Return the backend whose model resolver will interpret this stage's model."""
+    from ouroboros.config_tui.fields import GLOBAL_LLM_BACKEND_FIELD, get_value
+    from ouroboros.orchestrator_stage import Stage
+
+    if stage is Stage.EXECUTE:
+        return agent_backend
+    stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
+    if stage_agent:
+        return _normalize_runtime_backend_for_display(stage_agent)
+    profile_default = get_value(data, "orchestrator.runtime_profile.default")
+    if profile_default:
+        return _normalize_runtime_backend_for_display(profile_default)
+    llm_value, _ = _effective_llm_backend_value(get_value(data, GLOBAL_LLM_BACKEND_FIELD.key))
+    if llm_value != "claude_code" or get_value(data, GLOBAL_LLM_BACKEND_FIELD.key) is not None:
+        return _normalize_runtime_backend_for_display(llm_value)
+    return agent_backend
+
+
+def _resolved_stage_model_for_display(
+    stage: object,
+    model_value: str,
+    model_source: str,
+    model_backend: str,
+) -> tuple[str, str]:
+    """Render the model value using the same stage-specific loader semantics."""
+    from ouroboros.config.loader import (
+        get_clarification_model,
+        get_execution_model,
+        get_reflect_model,
+        get_semantic_model,
+    )
+    from ouroboros.orchestrator_stage import Stage
+
+    source_is_env_override = model_source.startswith("env ")
+    normalized_source = model_source
+    if stage is Stage.EXECUTE:
+        resolved_model = get_execution_model()
+        normalized_model = resolved_model or "backend default"
+        if (
+            resolved_model is None
+            and _is_automatic_model_value(model_value)
+            and not source_is_env_override
+        ):
+            normalized_source = f"{model_source} → backend default"
+        return _display_stage_model(normalized_model, normalized_source, model_backend)
+
+    if not isinstance(stage, Stage):
+        return _normalize_stage_model_for_display(stage, model_value, model_source, model_backend)
+
+    getter_by_stage = {
+        Stage.INTERVIEW: get_clarification_model,
+        Stage.EVALUATE: get_semantic_model,
+        Stage.REFLECT: get_reflect_model,
+    }
+    getter = getter_by_stage.get(stage)
+    if getter is None:
+        return _normalize_stage_model_for_display(stage, model_value, model_source, model_backend)
+    normalized_model = getter(model_backend)
+    if normalized_model != model_value and not source_is_env_override:
+        normalized_source = f"{model_source} → backend default"
+    return _display_stage_model(normalized_model, normalized_source, model_backend)
+
+
 def _config_stage_model_fields() -> dict[object, _ConfigStageModelField]:
     """Model fields shown by `config show`, including script-only Execute state."""
     from ouroboros.config_tui.fields import STAGE_MODEL_FIELDS
@@ -415,8 +479,9 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
                 "backend default",
                 empty_env_overrides=getattr(model_field, "empty_env_overrides", False),
             )
-            model_value, model_source = _normalize_stage_model_for_display(
-                stage, model_value, model_source, resolved
+            model_backend = _stage_model_backend_for_display(stage, data, resolved)
+            model_value, model_source = _resolved_stage_model_for_display(
+                stage, model_value, model_source, model_backend
             )
             model_key = model_field.key
         stages[stage.value] = {
@@ -506,8 +571,9 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
                 "backend default",
                 empty_env_overrides=getattr(model_field, "empty_env_overrides", False),
             )
-            model_value, model_source = _normalize_stage_model_for_display(
-                stage, model_value, model_source, resolved
+            model_backend = _stage_model_backend_for_display(stage, data, resolved)
+            model_value, model_source = _resolved_stage_model_for_display(
+                stage, model_value, model_source, model_backend
             )
         stages_table.add_row(stage.value, agent_cell, model_value, model_source)
     print_table(stages_table)

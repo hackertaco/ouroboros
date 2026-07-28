@@ -70,7 +70,6 @@ STAGE_MODEL_FIELDS: dict[Stage, SettingField] = {
         label="Interview & Seed model",
         env_vars=("OUROBOROS_CLARIFICATION_MODEL",),
         stage=Stage.INTERVIEW.value,
-        empty_env_value_overrides=True,
     ),
     Stage.EXECUTE: SettingField(
         key="execution.default_model",
@@ -84,14 +83,12 @@ STAGE_MODEL_FIELDS: dict[Stage, SettingField] = {
         label="Evaluation model",
         env_vars=("OUROBOROS_SEMANTIC_MODEL",),
         stage=Stage.EVALUATE.value,
-        empty_env_value_overrides=True,
     ),
     Stage.REFLECT: SettingField(
         key="resilience.reflect_model",
         label="Reflect model",
         env_vars=("OUROBOROS_REFLECT_MODEL",),
         stage=Stage.REFLECT.value,
-        empty_env_value_overrides=True,
     ),
 }
 

@@ -107,7 +107,7 @@ def test_build_command_rejects_in_place_codex_cli_change(
         runtime._build_command("/tmp/last-message")
 
 
-def test_codex_config_fingerprint_ignores_unreachable_embedded_profiles(
+def test_codex_config_fingerprint_tracks_handle_selectable_embedded_profiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,7 +128,7 @@ def test_codex_config_fingerprint_ignores_unreachable_embedded_profiles(
         encoding="utf-8",
     )
 
-    assert runtime._fingerprint_codex_config_files() == original
+    assert runtime._fingerprint_codex_config_files() != original
 
 
 def test_codex_config_fingerprint_tracks_reachable_embedded_profiles(

@@ -29,10 +29,10 @@ def test_active_env_overrides_unset(monkeypatch) -> None:
     assert fields.active_env_overrides(fields.GLOBAL_LLM_BACKEND_FIELD) == ()
 
 
-def test_active_env_overrides_blank_value_counts_as_shadowing_override(monkeypatch) -> None:
+def test_active_env_overrides_blank_internal_model_value_does_not_count(monkeypatch) -> None:
     monkeypatch.setenv("OUROBOROS_CLARIFICATION_MODEL", "   ")
     field = fields.STAGE_MODEL_FIELDS[Stage.INTERVIEW]
-    assert fields.active_env_overrides(field) == ("OUROBOROS_CLARIFICATION_MODEL",)
+    assert fields.active_env_overrides(field) == ()
 
 
 def test_active_env_overrides_blank_runtime_value_does_not_count(monkeypatch) -> None:

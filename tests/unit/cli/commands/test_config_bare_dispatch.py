@@ -118,6 +118,9 @@ def _show_env(monkeypatch, tmp_path, config: dict) -> None:
         "OUROBOROS_RUNTIME",
         "OUROBOROS_LLM_BACKEND",
         "OUROBOROS_CLARIFICATION_MODEL",
+        "OUROBOROS_EXECUTION_MODEL",
+        "OUROBOROS_SEMANTIC_MODEL",
+        "OUROBOROS_REFLECT_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -144,7 +147,7 @@ def test_show_effective_view_renders_stages_and_inheritance(monkeypatch, tmp_pat
     assert "Per-stage overrides" in out
     assert "(inherit)" in out and "opencode" in out  # inheriting stages resolved
     assert "codex" in out  # explicit execute override
-    assert "my-model" in out  # configured stage model
+    assert "backend" in out and "default" in out  # runtime-normalized stage model
     assert "interview" in out and "reflect" in out
 
 
@@ -250,6 +253,64 @@ def test_show_json_preserves_env_stage_model_pin_for_codex(monkeypatch, tmp_path
     payload = json.loads(result.output)
     assert payload["stages"]["interview"]["model"] == "claude-opus-4-8"
     assert payload["stages"]["interview"]["model_source"] == "env OUROBOROS_CLARIFICATION_MODEL ⚠"
+
+
+def test_show_json_uses_stage_llm_backend_for_inherited_internal_models(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {"runtime_backend": "codex"},
+            "llm": {"backend": "litellm"},
+            "clarification": {"default_model": "claude-opus-4-8"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex", "litellm": "/bin/litellm"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["stages"]["interview"]["agent"] == "codex"
+    assert payload["stages"]["interview"]["model"] == "claude-opus-4-8"
+    assert payload["stages"]["interview"]["model_source"] == "config"
+
+
+def test_show_json_normalizes_execute_current_sentinel_through_loader(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {
+                "runtime_backend": "claude",
+                "runtime_profile": {"stages": {"execute": "claude"}},
+            },
+            "execution": {"default_model": "current"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"claude": "/bin/claude"},
+    )
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0, result.output
+    execute = json.loads(result.output)["stages"]["execute"]
+    assert execute["model"] == "backend default"
+    assert execute["model_source"] == "config → backend default"
 
 
 def test_show_json_uses_runtime_env_as_llm_backend_fallback(monkeypatch, tmp_path) -> None:

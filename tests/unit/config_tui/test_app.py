@@ -14,6 +14,7 @@ import sys
 import pytest
 from textual.widgets import Input, OptionList, Select, Static
 
+from ouroboros.config._model_defaults import DEFAULT_OPUS_MODEL
 from ouroboros.config_tui import persistence
 from ouroboros.config_tui.app import (
     CUSTOM_SENTINEL,
@@ -23,7 +24,7 @@ from ouroboros.config_tui.app import (
     ModelSearchScreen,
     SettingsApp,
 )
-from ouroboros.config_tui.fields import STAGE_MODEL_FIELDS
+from ouroboros.config_tui.fields import STAGE_MODEL_FIELDS, active_env_overrides
 from ouroboros.orchestrator_stage import Stage
 
 
@@ -842,6 +843,33 @@ async def test_save_keeps_default_sentinel_when_llm_backend_supports_it(
 
 
 @pytest.mark.asyncio
+async def test_inherited_internal_stage_model_backend_honors_llm_backend(
+    app_env, monkeypatch
+) -> None:
+    """Inherited Interview/Evaluate/Reflect models use runtime's LLM resolver."""
+    app_env["orchestrator"]["runtime_backend"] = "codex"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"execute": "codex"}
+    app_env["llm"]["backend"] = "claude"
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app._selected_runtime(Stage.INTERVIEW) == "codex"
+        assert pilot.app._projected_completion_backend(Stage.INTERVIEW) == "claude"
+        assert pilot.app._projected_completion_backend(Stage.EXECUTE) == "codex"
+
+
+def test_blank_internal_model_env_does_not_claim_shadowing(monkeypatch) -> None:
+    monkeypatch.setenv("OUROBOROS_CLARIFICATION_MODEL", "")
+
+    assert active_env_overrides(STAGE_MODEL_FIELDS[Stage.INTERVIEW]) == ()
+
+
+@pytest.mark.asyncio
 async def test_runtime_only_agent_default_sentinel_uses_completion_backend(
     app_env, monkeypatch
 ) -> None:
@@ -860,7 +888,7 @@ async def test_runtime_only_agent_default_sentinel_uses_completion_backend(
         stage = Stage.INTERVIEW.value
         pilot.app.query_one(f"#stage-runtime-{stage}", Select).value = "antigravity"
         await pilot.pause()
-        assert pilot.app.query_one(f"#stage-model-{stage}", Select).value == "default"
+        assert pilot.app.query_one(f"#stage-model-{stage}", Select).value == DEFAULT_OPUS_MODEL
 
         pilot.app.action_save()
         await pilot.pause()

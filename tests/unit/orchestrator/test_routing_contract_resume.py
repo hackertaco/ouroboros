@@ -1717,6 +1717,63 @@ def test_codex_profile_reasoning_effort_drift_is_rejected_before_command_build(
             runtime._build_command("/tmp/output", runtime_handle=handle)
 
 
+def test_provider_neutral_llm_profile_model_changes_runtime_identity() -> None:
+    """A handle-selectable top-level llm_profile model is durable identity."""
+    original_config = OuroborosConfig(
+        llm_profiles={"implementation": {"model": "gpt-a"}},
+        llm_role_profiles={"agent_runtime_implementation": "implementation"},
+    )
+    drifted_config = OuroborosConfig(
+        llm_profiles={"implementation": {"model": "gpt-b"}},
+        llm_role_profiles={"agent_runtime_implementation": "implementation"},
+    )
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=original_config):
+        original_runtime = CodexCliRuntime(cli_path="/bin/echo", model=None, cwd="/tmp/project")
+    with patch("ouroboros.providers.profiles.load_config", return_value=drifted_config):
+        drifted_runtime = CodexCliRuntime(cli_path="/bin/echo", model=None, cwd="/tmp/project")
+
+    assert (
+        original_runtime.execution_identity_contract()["profile_resolution_fingerprint"]
+        != drifted_runtime.execution_identity_contract()["profile_resolution_fingerprint"]
+    )
+
+
+def test_unselected_native_codex_profile_changes_runtime_identity(
+    tmp_path: Path,
+) -> None:
+    """Any Codex-native profile table is handle-selectable through codex_profile."""
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    base_config = OuroborosConfig()
+
+    config_toml.write_text(
+        'model = "gpt-5"\n\n[profiles.unselected]\nmodel = "gpt-a"\n',
+        encoding="utf-8",
+    )
+    with (
+        patch("ouroboros.codex.home.resolve_codex_home", return_value=codex_home),
+        patch("ouroboros.providers.profiles.load_config", return_value=base_config),
+    ):
+        original_runtime = CodexCliRuntime(cli_path="/bin/echo", model=None, cwd="/tmp/project")
+
+    config_toml.write_text(
+        'model = "gpt-5"\n\n[profiles.unselected]\nmodel = "gpt-b"\n',
+        encoding="utf-8",
+    )
+    with (
+        patch("ouroboros.codex.home.resolve_codex_home", return_value=codex_home),
+        patch("ouroboros.providers.profiles.load_config", return_value=base_config),
+    ):
+        drifted_runtime = CodexCliRuntime(cli_path="/bin/echo", model=None, cwd="/tmp/project")
+
+    assert (
+        original_runtime.execution_identity_contract()["codex_config_fingerprint"]
+        != drifted_runtime.execution_identity_contract()["codex_config_fingerprint"]
+    )
+
+
 @pytest.mark.parametrize(
     "runtime_handle",
     [

@@ -98,6 +98,7 @@ class TestRemoveCodexMcp:
             'model = "gpt-5"\n\n'
             "[mcp_servers.ouroboros]\n"
             'command = "uvx"\n\n'
+            'args = ["ouroboros", "mcp", "serve"]\n\n'
             "[mcp_servers.ouroboros.env]\n"
             'OUROBOROS_AGENT_RUNTIME = "codex"\n\n'
             "[other]\nfoo = 1\n"
@@ -124,6 +125,7 @@ class TestRemoveCodexMcp:
             "\n"
             "[mcp_servers.ouroboros]\n"
             'command = "uvx"\n\n'
+            'args = ["ouroboros", "mcp", "serve"]\n\n'
             "# Comment inside other section\n"
             "[other]\nfoo = 1\n"
         )
@@ -149,6 +151,7 @@ class TestRemoveCodexMcp:
             "# Unrelated user comment\n"
             "[mcp_servers.ouroboros]\n"
             'command = "uvx"\n\n'
+            'args = ["ouroboros", "mcp", "serve"]\n\n'
             "[other]\nfoo = 1\n"
         )
 
@@ -168,7 +171,7 @@ class TestRemoveCodexMcp:
         codex_config.write_text(
             "[mcp_servers.ouroboros]\n"
             'command = "uvx"\n'
-            'args = ["ouroboros"]\n'
+            'args = ["ouroboros", "mcp", "serve"]\n'
             "\n"
             "# User note about the next section\n"
             "[other]\nfoo = 1\n"
@@ -182,6 +185,21 @@ class TestRemoveCodexMcp:
         assert "[mcp_servers.ouroboros]" not in content
         assert "# User note about the next section" in content
         assert "[other]" in content
+
+    def test_preserves_user_managed_url_entry(self, tmp_path: Path) -> None:
+        """Uninstall must not delete a custom MCP entry setup auto would preserve."""
+        codex_config = tmp_path / ".codex" / "config.toml"
+        codex_config.parent.mkdir(parents=True)
+        original = (
+            '[mcp_servers.ouroboros]\nurl = "http://127.0.0.1:12000/mcp"\n\n[other]\nfoo = 1\n'
+        )
+        codex_config.write_text(original)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = _remove_codex_mcp(dry_run=False)
+
+        assert result is False
+        assert codex_config.read_text() == original
 
     def test_no_ouroboros_returns_false(self, tmp_path: Path) -> None:
         codex_config = tmp_path / ".codex" / "config.toml"
