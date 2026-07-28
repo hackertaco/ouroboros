@@ -309,6 +309,7 @@ class CodexCliRuntime:
             # events. Resume compares the hashes, and command construction
             # checks them again before consulting any role-dependent fallback.
             self._profile_resolution_fingerprint = self._fingerprint_profile_resolution_config()
+            self._codex_profile_v2_names = self._codex_profile_v2_names_from_ouroboros_config()
             self._codex_config_fingerprint = self._fingerprint_codex_config_files()
             self._cli_executable_path_identity = self._cli_executable_identity()
             self._cli_executable_version_identity_snapshot = self._cli_executable_version_identity()
@@ -323,6 +324,7 @@ class CodexCliRuntime:
             self._resolved_fallback_reasoning_effort = None
             self._profile_resolution_fingerprint = None
             self._codex_config_fingerprint = None
+            self._codex_profile_v2_names = set()
             self._cli_executable_path_identity = None
             self._cli_executable_version_identity_snapshot = None
             self._runtime_handle_profile_fingerprints = {}
@@ -724,6 +726,25 @@ class CodexCliRuntime:
 
         return resolve_codex_home()
 
+    @staticmethod
+    def _codex_profile_v2_names_from_ouroboros_config() -> set[str]:
+        """Return Codex profile-v2 names referenced by current Ouroboros profiles."""
+        from ouroboros.providers import profiles as profile_module
+
+        try:
+            config = profile_module.load_config()
+        except Exception:
+            return set()
+
+        names: set[str] = set()
+        for profile in config.llm_profiles.values():
+            for key, provider in profile.providers.items():
+                if key.strip().lower() not in {"codex", "codex_cli"}:
+                    continue
+                if isinstance(provider.profile, str) and provider.profile.strip():
+                    names.add(provider.profile.strip())
+        return names
+
     def _fingerprint_codex_config_files(
         self,
         runtime_handle: RuntimeHandle | None = None,
@@ -731,6 +752,9 @@ class CodexCliRuntime:
         """Hash global Codex config plus command-reachable profile-v2 TOML."""
         codex_home = self._codex_home()
         candidates: dict[str, Path] = {"config.toml": codex_home / "config.toml"}
+        for profile_name in self._codex_profile_v2_names:
+            filename = f"{profile_name}.config.toml"
+            candidates[filename] = codex_home / filename
         handle_native_profile = self._codex_profile_from_metadata(runtime_handle)
         handle_resolved_profile: str | None = None
         if runtime_handle is not None and self._runtime_handle_has_profile_selection(
@@ -887,7 +911,10 @@ class CodexCliRuntime:
         key = self._runtime_handle_fingerprint_key(runtime_handle)
         current = self._fingerprint_codex_config_files(runtime_handle if key is not None else None)
         if key is not None:
-            previous = self._runtime_handle_codex_config_fingerprints.setdefault(key, current)
+            previous = self._runtime_handle_codex_config_fingerprints.get(key)
+            if previous is None:
+                previous = self._codex_config_fingerprint
+                self._runtime_handle_codex_config_fingerprints[key] = previous
             if current == previous:
                 return
         elif current == self._codex_config_fingerprint:
@@ -927,11 +954,8 @@ class CodexCliRuntime:
         if key is not None:
             previous = self._runtime_handle_profile_fingerprints.get(key)
             if previous is None:
-                if self._runtime_profile_from_metadata(runtime_handle) is not None:
-                    self._runtime_handle_profile_fingerprints[key] = current
-                    return
                 previous = self._profile_resolution_fingerprint
-                self._runtime_handle_profile_fingerprints[key] = current
+                self._runtime_handle_profile_fingerprints[key] = previous
             if current == previous:
                 return
         elif current == self._profile_resolution_fingerprint:

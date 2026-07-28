@@ -319,9 +319,8 @@ def test_handle_llm_profile_change_invalidates_cached_command_fingerprint() -> N
         kind="implementation",
         metadata={"llm_profile": "implementation"},
     )
-    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
-
     with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
         command = runtime._build_command("/tmp/last-message", runtime_handle=handle)
     assert "--model" in command
     assert command[command.index("--model") + 1] == "gpt-a"
@@ -1045,6 +1044,65 @@ class TestCodexCliRuntime:
         assert "--model" in command
         assert command[command.index("--model") + 1] == "gpt-5.5"
         assert "--profile" not in command
+
+    def test_build_command_rejects_first_use_explicit_llm_profile_drift(self) -> None:
+        """First use of handle-selected llm_profile must compare with init-time identity."""
+        runtime_handle = RuntimeHandle(
+            backend="codex_cli",
+            kind="evaluation_session",
+            metadata={"llm_profile": "deep"},
+        )
+        original_config = OuroborosConfig(llm_profiles={"deep": {"model": "gpt-a"}})
+        drifted_config = OuroborosConfig(llm_profiles={"deep": {"model": "gpt-b"}})
+
+        with patch("ouroboros.providers.profiles.load_config", return_value=original_config):
+            runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+        with (
+            patch("ouroboros.providers.profiles.load_config", return_value=drifted_config),
+            pytest.raises(RuntimeError, match="profile routing changed"),
+        ):
+            runtime._build_command(
+                output_last_message_path="/tmp/out.txt",
+                runtime_handle=runtime_handle,
+            )
+
+    def test_build_command_rejects_first_use_explicit_codex_profile_drift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First use of handle-selected codex_profile must compare native profile files."""
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "config.toml").write_text("", encoding="utf-8")
+        (codex_home / "deep.config.toml").write_text('model = "gpt-a"\n', encoding="utf-8")
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        runtime_handle = RuntimeHandle(
+            backend="codex_cli",
+            kind="evaluation_session",
+            metadata={"codex_profile": "deep"},
+        )
+
+        with patch(
+            "ouroboros.providers.profiles.load_config",
+            return_value=OuroborosConfig(),
+        ):
+            runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+        (codex_home / "deep.config.toml").write_text('model = "gpt-b"\n', encoding="utf-8")
+
+        with (
+            patch(
+                "ouroboros.providers.profiles.load_config",
+                return_value=OuroborosConfig(),
+            ),
+            pytest.raises(RuntimeError, match="Codex configuration changed"),
+        ):
+            runtime._build_command(
+                output_last_message_path="/tmp/out.txt",
+                runtime_handle=runtime_handle,
+            )
 
     def test_build_command_omits_profile_flag_when_runtime_profile_unset(self) -> None:
         """Default runtime_profile=None preserves existing command shape (regression)."""

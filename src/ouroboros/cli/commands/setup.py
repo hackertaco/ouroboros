@@ -1605,6 +1605,7 @@ def _snapshot_path(path: Path, *, _seen: frozenset[Path] = frozenset()) -> _Path
     except FileNotFoundError:
         return _PathSnapshot(kind="missing")
 
+    current_path = path.expanduser().absolute()
     mode = stat.S_IMODE(stat_result.st_mode)
     if stat.S_ISLNK(stat_result.st_mode):
         link_target = os.readlink(path)
@@ -1616,7 +1617,7 @@ def _snapshot_path(path: Path, *, _seen: frozenset[Path] = frozenset()) -> _Path
             return _PathSnapshot(kind="symlink", mode=mode, link_target=link_target)
         target_snapshot = _snapshot_path(
             target_path,
-            _seen=_seen | {path.expanduser().absolute()},
+            _seen=_seen | {current_path},
         )
         try:
             target_stat = target_path.lstat()
@@ -1650,7 +1651,7 @@ def _snapshot_path(path: Path, *, _seen: frozenset[Path] = frozenset()) -> _Path
 
     children: list[tuple[str, _PathSnapshot]] = []
     for child in sorted(path.iterdir(), key=lambda item: item.name):
-        children.append((child.name, _snapshot_path(child)))
+        children.append((child.name, _snapshot_path(child, _seen=_seen | {current_path})))
     return _PathSnapshot(kind="directory", mode=mode, children=tuple(children))
 
 

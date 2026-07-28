@@ -1545,6 +1545,20 @@ class TestCodexSetup:
         assert os.readlink(codex_config) == str(dangling_target)
         assert not dangling_target.exists()
 
+    def test_setup_codex_snapshot_handles_managed_symlink_cycle(self, tmp_path: Path) -> None:
+        """Managed path snapshots must not recurse through a symlink back to Codex home."""
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        codex_config = codex_home / "config.toml"
+        codex_config.symlink_to(codex_home, target_is_directory=True)
+
+        snapshot = setup_cmd._snapshot_path(codex_config)
+
+        assert snapshot.kind == "symlink"
+        assert snapshot.link_target == str(codex_home)
+        assert snapshot.link_target_snapshot is not None
+        assert snapshot.link_target_snapshot.kind == "directory"
+
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path
     ) -> None:
