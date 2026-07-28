@@ -1543,14 +1543,6 @@ def _install_codex_default_llm_profiles(
         provider_had_model = "model" in codex_provider
         provider_had_effort = "reasoning_effort" in codex_provider
         changed = False
-        if (
-            not provider_had_profile
-            and not provider_had_model
-            and isinstance(existing_profile.get("model"), str)
-            and existing_profile["model"].strip()
-        ):
-            codex_provider["model"] = "default"
-            changed = True
         if not provider_had_profile and not provider_had_model and not provider_had_effort:
             codex_provider["reasoning_effort"] = default_codex["reasoning_effort"]  # type: ignore[index]
             changed = True
@@ -1813,6 +1805,35 @@ def _restore_managed_codex_setup_paths(
         _restore_path_snapshot(path, path_snapshot, restore_link_targets=False)
 
 
+def _find_managed_codex_symlink_conflicts(codex_home: Path) -> list[Path]:
+    """Return managed Codex paths that setup would write through as symlinks."""
+    candidates: set[Path] = {
+        codex_home / "config.toml",
+        codex_home / f"{_CODEX_WORKER_PROFILE_NAME}.config.toml",
+        codex_home / "rules",
+        codex_home / "skills",
+        *(
+            codex_home / f"{profile_name}.config.toml"
+            for profile_name in _CODEX_DEFAULT_PROFILE_SECTIONS
+        ),
+    }
+    for path in _managed_codex_setup_paths(codex_home):
+        candidates.add(path)
+        parent = path.parent
+        while parent != codex_home and codex_home in (parent, *parent.parents):
+            candidates.add(parent)
+            parent = parent.parent
+
+    conflicts: list[Path] = []
+    for path in sorted(candidates):
+        try:
+            if path.is_symlink():
+                conflicts.append(path)
+        except OSError:
+            conflicts.append(path)
+    return conflicts
+
+
 def _snapshot_directory(path: Path) -> dict[Path, bytes]:
     """Return a recursive file snapshot for rollback."""
     snapshot: dict[Path, bytes] = {}
@@ -1918,6 +1939,12 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
     codex_home = resolve_codex_home()
+    symlink_conflicts = _find_managed_codex_symlink_conflicts(codex_home)
+    if symlink_conflicts:
+        formatted = ", ".join(str(path) for path in symlink_conflicts)
+        print_error(f"Codex setup refuses to rewrite managed paths through symlinks: {formatted}")
+        print_info("Replace the symlink with a regular Codex config path, then rerun setup.")
+        return False
     managed_codex_snapshot = _snapshot_managed_codex_setup_paths(codex_home)
     config_snapshot = _snapshot_path(config_path)
     credentials_snapshot = _snapshot_path(credentials_path)

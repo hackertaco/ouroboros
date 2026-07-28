@@ -1482,8 +1482,8 @@ class TestCodexSetup:
         assert stat.S_IMODE(codex_config.stat().st_mode) == 0o600
         assert "[mcp_servers.ouroboros]" in codex_config.read_text(encoding="utf-8")
 
-    def test_setup_codex_rollback_preserves_codex_symlink_topology(self, tmp_path: Path) -> None:
-        """Late rollback must restore managed symlink leaves without owning their targets."""
+    def test_setup_codex_rejects_managed_codex_symlink_before_writing(self, tmp_path: Path) -> None:
+        """Setup must not write MCP config through a symlinked managed path."""
         config_dir = tmp_path / ".ouroboros"
         config_dir.mkdir()
         config_path = config_dir / "config.yaml"
@@ -1500,33 +1500,12 @@ class TestCodexSetup:
         codex_config = codex_home / "config.toml"
         codex_config.symlink_to(config_target)
 
-        skills_target = target_dir / "ouroboros-welcome"
-        skills_target.mkdir()
-        (skills_target / "SKILL.md").write_text("old skill\n", encoding="utf-8")
-        (codex_home / "skills").mkdir()
-        skill_link = codex_home / "skills" / "ouroboros-welcome"
-        skill_link.symlink_to(skills_target, target_is_directory=True)
-
-        def _install_artifacts() -> bool:
-            config_target.write_text('[mcp_servers.ouroboros]\ncommand = "new"\n', encoding="utf-8")
-            (skills_target / "created-during-setup.txt").write_text(
-                "external target file\n",
-                encoding="utf-8",
-            )
-            return True
-
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
-            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
             patch(
-                "ouroboros.cli.commands.setup._install_codex_artifacts",
-                side_effect=_install_artifacts,
-            ),
-            patch("ouroboros.cli.commands.setup._codex_uses_profile_v2", return_value=True),
-            patch(
-                "ouroboros.cli.commands.setup._register_codex_worker_profile",
-                return_value=False,
+                "ouroboros.cli.commands.setup._register_codex_mcp_server",
+                side_effect=AssertionError("must fail before MCP write"),
             ),
         ):
             assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
@@ -1534,19 +1513,12 @@ class TestCodexSetup:
         assert config_path.read_text(encoding="utf-8") == original_config
         assert codex_config.is_symlink()
         assert os.readlink(codex_config) == str(config_target)
-        assert (
-            config_target.read_text(encoding="utf-8")
-            == '[mcp_servers.ouroboros]\ncommand = "new"\n'
-        )
-        assert skill_link.is_symlink()
-        assert os.readlink(skill_link) == str(skills_target)
-        assert (skills_target / "SKILL.md").read_text(encoding="utf-8") == "old skill\n"
-        assert (skills_target / "created-during-setup.txt").read_text(encoding="utf-8") == (
-            "external target file\n"
-        )
+        assert config_target.read_text(encoding="utf-8") == original_toml
 
-    def test_setup_codex_rollback_preserves_dangling_config_symlink(self, tmp_path: Path) -> None:
-        """Rollback must not delete files created behind a managed Codex symlink."""
+    def test_setup_codex_rejects_dangling_config_symlink_before_writing(
+        self, tmp_path: Path
+    ) -> None:
+        """A dangling managed symlink is still an unsafe write-through topology."""
         config_dir = tmp_path / ".ouroboros"
         config_dir.mkdir()
         config_path = config_dir / "config.yaml"
@@ -1563,29 +1535,19 @@ class TestCodexSetup:
         codex_config = codex_home / "config.toml"
         codex_config.symlink_to(dangling_target)
 
-        def _install_artifacts() -> bool:
-            dangling_target.write_text('model = "new"\n', encoding="utf-8")
-            return True
-
         with (
             patch("pathlib.Path.home", return_value=tmp_path),
             patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
-            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
             patch(
-                "ouroboros.cli.commands.setup._install_codex_artifacts",
-                side_effect=_install_artifacts,
-            ),
-            patch("ouroboros.cli.commands.setup._codex_uses_profile_v2", return_value=True),
-            patch(
-                "ouroboros.cli.commands.setup._register_codex_worker_profile",
-                return_value=False,
+                "ouroboros.cli.commands.setup._register_codex_mcp_server",
+                side_effect=AssertionError("must fail before MCP write"),
             ),
         ):
             assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
 
         assert codex_config.is_symlink()
         assert os.readlink(codex_config) == str(dangling_target)
-        assert dangling_target.read_text(encoding="utf-8") == 'model = "new"\n'
+        assert not dangling_target.exists()
 
     def test_setup_codex_snapshot_handles_managed_symlink_cycle(self, tmp_path: Path) -> None:
         """Managed path snapshots must not recurse through a symlink back to Codex home."""
@@ -1741,8 +1703,8 @@ class TestCodexSetup:
         assert resolved.config.model == "user-pin"
         assert resolved.backend_profile == "user-profile"
 
-    def test_codex_setup_neutralizes_existing_profile_top_level_model_for_codex(self) -> None:
-        """Default role profiles must not inherit a user-owned non-Codex model."""
+    def test_codex_setup_preserves_existing_profile_top_level_model_for_codex(self) -> None:
+        """Provider-neutral profile models stay effective for Codex."""
         config_dict = {
             "llm_profiles": {
                 "fast": {
@@ -1755,7 +1717,6 @@ class TestCodexSetup:
         setup_cmd._install_codex_default_llm_profiles(config_dict)
 
         assert config_dict["llm_profiles"]["fast"]["providers"]["codex"] == {
-            "model": "default",
             "reasoning_effort": "low",
         }
         config = OuroborosConfig.model_validate(config_dict)
@@ -1764,7 +1725,7 @@ class TestCodexSetup:
                 CompletionConfig(model="default", role="assertion_extraction"), backend="codex"
             )
 
-        assert resolved.config.model == "default"
+        assert resolved.config.model == "anthropic/custom-fast"
 
     def test_codex_setup_neutralizes_existing_effort_only_provider_model(self) -> None:
         """Effort-only Codex providers must not inherit provider-neutral model pins."""
@@ -1780,7 +1741,6 @@ class TestCodexSetup:
         setup_cmd._install_codex_default_llm_profiles(config_dict)
 
         assert config_dict["llm_profiles"]["fast"]["providers"]["codex"] == {
-            "model": "default",
             "reasoning_effort": "low",
         }
 

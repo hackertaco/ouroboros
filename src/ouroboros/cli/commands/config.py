@@ -373,10 +373,12 @@ def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: s
 
     if stage is Stage.EXECUTE:
         return agent_backend
-    llm_value, _ = _effective_llm_backend_value(
+    llm_value, llm_source = _effective_llm_backend_value(
         get_value(data, GLOBAL_LLM_BACKEND_FIELD.key),
         default_agent=agent_backend,
     )
+    if llm_source.startswith("env OUROBOROS_LLM_BACKEND"):
+        return _normalize_runtime_backend_for_display(llm_value)
     stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
     if stage_agent:
         stage_backend = _normalize_runtime_backend_for_display(stage_agent)

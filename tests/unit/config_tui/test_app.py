@@ -656,10 +656,10 @@ async def test_execute_backend_change_preserves_replacement_execute_model(
 
 
 @pytest.mark.asyncio
-async def test_execute_backend_change_persists_displayed_automatic_model(
+async def test_execute_backend_change_clears_pin_instead_of_persisting_automatic_model(
     app_env, monkeypatch
 ) -> None:
-    """If a backend switch displays a concrete model, Save must persist that same value."""
+    """If a backend switch displays an automatic model, Save must not turn it into a pin."""
     app_env.setdefault("execution", {})["default_model"] = "gpt-5"
     captured: dict[str, object] = {}
     monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
@@ -679,7 +679,7 @@ async def test_execute_backend_change_persists_displayed_automatic_model(
         await pilot.pause()
 
     assert captured["orchestrator.runtime_profile.stages.execute"] == "claude"
-    assert captured["execution.default_model"] == "claude-opus-4-8"
+    assert captured["execution.default_model"] is None
 
 
 @pytest.mark.asyncio
@@ -738,6 +738,30 @@ async def test_open_save_preserves_unlisted_custom_execute_model(app_env, monkey
 
 
 @pytest.mark.asyncio
+async def test_open_save_does_not_persist_programmatic_execute_default(
+    app_env, monkeypatch
+) -> None:
+    """Opening the UI and saving must not turn automatic Execute selection into a pin."""
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {}
+    app_env.pop("execution", None)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select).value
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert "execution.default_model" not in captured
+
+
+@pytest.mark.asyncio
 async def test_explicit_blank_execute_model_clears_saved_pin(app_env, monkeypatch) -> None:
     """The blank Select state is an explicit request to clear the saved Execute pin."""
     app_env.setdefault("execution", {})["default_model"] = "claude-sonnet-4-6"
@@ -757,6 +781,69 @@ async def test_explicit_blank_execute_model_clears_saved_pin(app_env, monkeypatc
         await pilot.pause()
 
     assert captured["execution.default_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_env_override_default_model_selection_does_not_persist_codex_sentinel(
+    app_env, monkeypatch
+) -> None:
+    """Env-effective Codex must not save Codex's sentinel into saved Claude routing."""
+    app_env["orchestrator"]["runtime_backend"] = "claude"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {}
+    app_env.setdefault("clarification", {})["default_model"] = "claude-opus-4-8"
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        stage = Stage.INTERVIEW.value
+        values = {
+            value for _, value in pilot.app.query_one(f"#stage-model-{stage}", Select)._options
+        }
+        assert "default" in values
+        pilot.app.query_one(f"#stage-model-{stage}", Select).value = "default"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert "clarification.default_model" not in captured
+
+
+@pytest.mark.asyncio
+async def test_runtime_only_stage_switch_preserves_compatible_custom_completion_model(
+    app_env, monkeypatch
+) -> None:
+    """Runtime-only agent switches must compare completion backends, not agent ids."""
+    app_env["orchestrator"]["runtime_backend"] = "claude"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"interview": "antigravity"}
+    app_env.setdefault("clarification", {})["default_model"] = "claude-private-model"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {
+            "claude": "/bin/claude",
+            "antigravity": "/bin/agy",
+            "grok": "/bin/grok",
+        },
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        stage = Stage.INTERVIEW.value
+        pilot.app.query_one(f"#stage-runtime-{stage}", Select).value = "grok"
+        await pilot.pause()
+        assert pilot.app.query_one(f"#stage-model-{stage}", Select).value == "claude-private-model"
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_profile.stages.interview"] == "grok"
+    assert "clarification.default_model" not in captured
 
 
 @pytest.mark.asyncio

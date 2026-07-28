@@ -975,10 +975,16 @@ class CodexCliRuntime:
         # consume; an unpinned model remains explicitly unobserved and the
         # runner fails closed unless native per-call routing enforces it.
         if self._runtime_backend != "codex":
+            native_agent = getattr(self, "_copilot_agent", None)
+            if not isinstance(native_agent, str) or not native_agent.strip():
+                native_agent = None
             return {
                 "kind": f"{self._runtime_handle_backend}_v1",
-                "fallback_model": constructor_model,
-                "effective_model_observed": constructor_model is not None,
+                "cli_executable_path": self._cli_executable_identity(),
+                "cli_executable_version": self._cli_executable_version_identity(),
+                "fallback_model": None if native_agent else constructor_model,
+                "native_agent": native_agent,
+                "effective_model_observed": constructor_model is not None and native_agent is None,
                 "llm_backend": normalized_llm_backend,
                 "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
                 "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",

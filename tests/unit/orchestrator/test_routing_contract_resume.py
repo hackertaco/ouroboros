@@ -31,6 +31,8 @@ from ouroboros.orchestrator.adapter import (
     RuntimeHandle,
 )
 from ouroboros.orchestrator.codex_cli_runtime import CodexCliRuntime
+from ouroboros.orchestrator.copilot_cli_runtime import CopilotCliRuntime
+from ouroboros.orchestrator.gemini_cli_runtime import GeminiCLIRuntime
 from ouroboros.orchestrator.goose_runtime import GooseCliRuntime
 from ouroboros.orchestrator.model_routing import (
     ModelRouter,
@@ -1572,6 +1574,58 @@ def test_non_codex_subclass_does_not_inherit_codex_profile_as_model_identity(
     identity = _assert_runtime_identity_observed(persisted)
     assert identity["kind"] == "goose_v1"
     assert identity["fallback_model"] is None
+
+
+def test_non_codex_runtime_identity_tracks_executable_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Trusted Codex-derived runtimes must bind resume identity to their executable."""
+    monkeypatch.setenv("OUROBOROS_MODEL_TIER_ROUTING", "off")
+    first_cli = tmp_path / "gemini-a"
+    second_cli = tmp_path / "gemini-b"
+    first_cli.write_text("#!/bin/sh\necho gemini-a\n", encoding="utf-8")
+    second_cli.write_text("#!/bin/sh\necho gemini-b\n", encoding="utf-8")
+    first_cli.chmod(0o755)
+    second_cli.chmod(0o755)
+    true_runtime = GeminiCLIRuntime(cli_path=first_cli, model="gemini-pro", cwd="/tmp/project")
+    false_runtime = GeminiCLIRuntime(cli_path=second_cli, model="gemini-pro", cwd="/tmp/project")
+
+    true_identity = true_runtime.execution_identity_contract()
+    false_identity = false_runtime.execution_identity_contract()
+
+    assert true_identity["cli_executable_path"] == str(first_cli)
+    assert false_identity["cli_executable_path"] == str(second_cli)
+    assert true_identity != false_identity
+
+
+def test_copilot_runtime_identity_tracks_native_agent_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copilot --agent selection must be identity-bearing and precede constructor model."""
+    monkeypatch.setenv("OUROBOROS_MODEL_TIER_ROUTING", "off")
+    model_runtime = CopilotCliRuntime(
+        cli_path="/bin/echo",
+        model="claude-opus-4.6",
+        cwd="/tmp/project",
+    )
+    agent_runtime = CopilotCliRuntime(
+        cli_path="/bin/echo",
+        model="claude-opus-4.6",
+        cwd="/tmp/project",
+        runtime_profile="worker",
+    )
+
+    model_identity = model_runtime.execution_identity_contract()
+    agent_identity = agent_runtime.execution_identity_contract()
+
+    assert model_identity["fallback_model"] == "claude-opus-4.6"
+    assert model_identity["native_agent"] is None
+    assert model_identity["effective_model_observed"] is True
+    assert agent_identity["fallback_model"] is None
+    assert agent_identity["native_agent"] == "ouroboros-worker"
+    assert agent_identity["effective_model_observed"] is False
+    assert model_identity != agent_identity
 
 
 def test_runtime_model_sentinel_is_not_persisted_as_a_constructor_pin(
