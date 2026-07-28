@@ -1559,6 +1559,37 @@ class TestCodexSetup:
         assert snapshot.link_target_snapshot is not None
         assert snapshot.link_target_snapshot.kind == "directory"
 
+    def test_setup_codex_managed_paths_accept_stale_rules_file(self, tmp_path: Path) -> None:
+        """A stale regular rules path must not crash setup snapshot discovery."""
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        rules_path = codex_home / "rules"
+        rules_path.write_text("not a directory\n", encoding="utf-8")
+
+        paths = setup_cmd._managed_codex_setup_paths(codex_home)
+
+        assert rules_path in paths
+
+    def test_legacy_codex_profile_with_comment_is_customized(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Operator comments in generated legacy profiles must prevent retirement."""
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        profile_name = "ouroboros-fast"
+        generated = setup_cmd._render_codex_profile_section(
+            profile_name,
+            setup_cmd._CODEX_DEFAULT_PROFILE_SECTIONS[profile_name],
+        )
+        (codex_home / "config.toml").write_text(
+            generated + "\n# keep this aligned with staging\n",
+            encoding="utf-8",
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert setup_cmd._legacy_codex_profile_is_customized(profile_name) is True
+
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path
     ) -> None:
@@ -1567,7 +1598,11 @@ class TestCodexSetup:
         codex_home.mkdir()
         codex_config = codex_home / "config.toml"
         codex_config.write_text(
-            '[profiles.ouroboros-fast]\nmodel_reasoning_effort = "low"\n',
+            setup_cmd._render_codex_profile_section(
+                "ouroboros-fast",
+                setup_cmd._CODEX_DEFAULT_PROFILE_SECTIONS["ouroboros-fast"],
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -1583,7 +1618,11 @@ class TestCodexSetup:
 
         mock_atomic.assert_called_once()
         assert codex_config.read_text(encoding="utf-8") == (
-            '[profiles.ouroboros-fast]\nmodel_reasoning_effort = "low"\n'
+            setup_cmd._render_codex_profile_section(
+                "ouroboros-fast",
+                setup_cmd._CODEX_DEFAULT_PROFILE_SECTIONS["ouroboros-fast"],
+            )
+            + "\n"
         )
 
     def test_setup_cli_codex_failure_exits_before_success_banner(self) -> None:
@@ -1684,6 +1723,24 @@ class TestCodexSetup:
             )
 
         assert resolved.config.model == "default"
+
+    def test_codex_setup_neutralizes_existing_effort_only_provider_model(self) -> None:
+        """Effort-only Codex providers must not inherit provider-neutral model pins."""
+        config_dict = {
+            "llm_profiles": {
+                "fast": {
+                    "model": "anthropic/custom-fast",
+                    "providers": {"codex": {"reasoning_effort": "low"}},
+                }
+            }
+        }
+
+        setup_cmd._install_codex_default_llm_profiles(config_dict)
+
+        assert config_dict["llm_profiles"]["fast"]["providers"]["codex"] == {
+            "model": "default",
+            "reasoning_effort": "low",
+        }
 
     def test_setup_codex_aborts_on_non_mapping_config(self, tmp_path: Path) -> None:
         """Malformed top-level config should not be rewritten by Codex setup."""

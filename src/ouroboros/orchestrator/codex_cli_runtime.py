@@ -642,26 +642,10 @@ class CodexCliRuntime:
         handle_profile = self._runtime_profile_from_metadata(runtime_handle)
         if handle_profile:
             relevant_profile_names.add(handle_profile)
-        handle_role = self._runtime_profile_role(runtime_handle)
         for role, role_profile in sorted(config.llm_role_profiles.items()):
-            if (
-                role != _RUNTIME_PROFILE_ROLE_PREFIX
-                and not role.startswith(f"{_RUNTIME_PROFILE_ROLE_PREFIX}_")
-                and role != handle_role
-            ):
-                continue
             if role_profile:
                 relevant_role_profiles[role] = role_profile
                 relevant_profile_names.add(role_profile)
-
-        if (
-            handle_role not in relevant_role_profiles
-            and handle_role in config.llm_role_profiles
-            and config.llm_role_profiles[handle_role]
-        ):
-            role_profile = config.llm_role_profiles[handle_role]
-            relevant_role_profiles[handle_role] = role_profile
-            relevant_profile_names.add(role_profile)
 
         # Runtime handles may select `llm_profile` directly through metadata.
         # After runtime recreation the process-local handle cache is empty, so

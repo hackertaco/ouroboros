@@ -107,6 +107,9 @@ _CLI_PATH_ENV_BY_BACKEND = {
     "hermes": "OUROBOROS_HERMES_CLI_PATH",
     "kiro": "OUROBOROS_KIRO_CLI_PATH",
     "opencode": "OUROBOROS_OPENCODE_CLI_PATH",
+    "antigravity": "OUROBOROS_ANTIGRAVITY_CLI_PATH",
+    "grok": "OUROBOROS_GROK_CLI_PATH",
+    "ourocode": "OUROBOROS_OUROCODE_CLI_PATH",
     "pi": "OUROBOROS_PI_CLI_PATH",
     "zcode": "OUROBOROS_ZCODE_CLI_PATH",
 }
@@ -248,7 +251,11 @@ def _effective_value(
     return str(default), "default"
 
 
-def _effective_llm_backend_value(raw_value: object) -> tuple[str, str]:
+def _effective_llm_backend_value(
+    raw_value: object,
+    *,
+    default_agent: object = None,
+) -> tuple[str, str]:
     """Resolve the effective LLM backend using the loader's env fallback order."""
     import os
 
@@ -267,6 +274,10 @@ def _effective_llm_backend_value(raw_value: object) -> tuple[str, str]:
         normalized = str(raw_value).strip().lower()
         if normalized != "claude_code":
             return _normalize_runtime_backend_for_display(normalized), "config"
+    default_backend = _normalize_runtime_backend_for_display(default_agent or "")
+    capability = get_backend_capability(default_backend)
+    if capability is not None and capability.supports_llm:
+        return default_backend, "default"
     return "claude_code", "default"
 
 
@@ -368,7 +379,10 @@ def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: s
     profile_default = get_value(data, "orchestrator.runtime_profile.default")
     if profile_default:
         return _normalize_runtime_backend_for_display(profile_default)
-    llm_value, _ = _effective_llm_backend_value(get_value(data, GLOBAL_LLM_BACKEND_FIELD.key))
+    llm_value, _ = _effective_llm_backend_value(
+        get_value(data, GLOBAL_LLM_BACKEND_FIELD.key),
+        default_agent=agent_backend,
+    )
     if llm_value != "claude_code":
         return _normalize_runtime_backend_for_display(llm_value)
     return agent_backend
@@ -462,7 +476,8 @@ def _effective_view_data(data: dict, config_path: Path) -> dict:
     )
     resolved_agent_value = _normalize_runtime_backend_for_display(agent_value)
     llm_value, llm_source = _effective_llm_backend_value(
-        get_value(data, GLOBAL_LLM_BACKEND_FIELD.key)
+        get_value(data, GLOBAL_LLM_BACKEND_FIELD.key),
+        default_agent=resolved_agent_value,
     )
     profile_default = get_value(data, "orchestrator.runtime_profile.default")
     stages: dict[str, dict] = {}
@@ -543,7 +558,8 @@ def _render_effective_view(data: dict, config_path: Path) -> None:
     )
     defaults_table.add_row("Default agent", _agent_cell(agent_value, installed), agent_source)
     llm_value, llm_source = _effective_llm_backend_value(
-        get_value(data, GLOBAL_LLM_BACKEND_FIELD.key)
+        get_value(data, GLOBAL_LLM_BACKEND_FIELD.key),
+        default_agent=agent_value,
     )
     defaults_table.add_row("LLM backend (internal calls)", llm_value, llm_source)
     print_table(defaults_table)

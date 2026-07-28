@@ -394,7 +394,7 @@ def test_show_json_treats_serialized_claude_llm_backend_as_default(monkeypatch, 
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["defaults"]["llm_backend"] == {"value": "claude_code", "source": "default"}
+    assert payload["defaults"]["llm_backend"] == {"value": "codex", "source": "default"}
     assert payload["stages"]["interview"]["agent"] == "codex"
     assert payload["stages"]["interview"]["model"] == (
         "Codex current selected model (concrete model not reported by Codex)"

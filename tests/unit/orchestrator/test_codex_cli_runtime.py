@@ -1067,6 +1067,28 @@ class TestCodexCliRuntime:
                 runtime_handle=runtime_handle,
             )
 
+    def test_build_command_allows_first_use_arbitrary_llm_role_from_init_identity(self) -> None:
+        """Arbitrary llm_role metadata must be included in the initialization fingerprint."""
+        runtime_handle = RuntimeHandle(
+            backend="codex_cli",
+            kind="qa_session",
+            metadata={"llm_role": "qa"},
+        )
+        config = OuroborosConfig(
+            llm_profiles={"qa-profile": {"providers": {"codex": {"model": "gpt-qa"}}}},
+            llm_role_profiles={"qa": "qa-profile"},
+        )
+
+        with patch("ouroboros.providers.profiles.load_config", return_value=config):
+            runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+            command = runtime._build_command(
+                output_last_message_path="/tmp/out.txt",
+                runtime_handle=runtime_handle,
+            )
+
+        assert "--model" in command
+        assert command[command.index("--model") + 1] == "gpt-qa"
+
     def test_build_command_rejects_first_use_explicit_codex_profile_drift(
         self,
         tmp_path: Path,

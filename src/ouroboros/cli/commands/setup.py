@@ -977,6 +977,31 @@ def _is_codex_ouroboros_profile_header(line: str, profile_names: set[str]) -> bo
     return False
 
 
+def _legacy_codex_profile_section_is_generated(
+    raw: str,
+    profile_name: str,
+    settings: _CodexProfileSettings,
+) -> bool:
+    """Return whether a legacy profile section is byte-equivalent to setup output."""
+    input_lines = raw.splitlines()
+    for index, line in enumerate(input_lines):
+        if line.strip() != f"[profiles.{profile_name}]":
+            continue
+        start = index
+        if index > 0 and input_lines[index - 1] == _CODEX_PROFILE_COMMENT:
+            start = index - 1
+        end = index + 1
+        while end < len(input_lines):
+            stripped = input_lines[end].strip()
+            is_table_header = stripped.startswith("[") and stripped.endswith("]")
+            if is_table_header and not stripped.startswith(f"[profiles.{profile_name}."):
+                break
+            end += 1
+        section = "\n".join(input_lines[start:end]).strip()
+        return section == _render_codex_profile_section(profile_name, settings).strip()
+    return False
+
+
 def _remove_codex_legacy_profile_sections(
     raw: str, profile_names: set[str]
 ) -> tuple[str, dict[str, _CodexProfileSettings]]:
@@ -1087,6 +1112,7 @@ def _retire_codex_default_profiles(*, protected_profile_names: set[str] | None =
                 for name, settings in _CODEX_DEFAULT_PROFILE_SECTIONS.items()
                 if name not in protected
                 if isinstance(profiles, dict) and profiles.get(name) == settings
+                if _legacy_codex_profile_section_is_generated(raw, name, settings)
             }
             if removable:
                 updated_raw, _ = _remove_codex_legacy_profile_sections(raw, removable)
@@ -1121,12 +1147,13 @@ def _legacy_codex_profile_is_customized(profile_name: str) -> bool:
     codex_config = codex_dir / "config.toml"
     if codex_config.exists():
         try:
-            profiles = tomllib.loads(codex_config.read_text(encoding="utf-8")).get("profiles")
+            raw = codex_config.read_text(encoding="utf-8")
+            profiles = tomllib.loads(raw).get("profiles")
         except (OSError, tomllib.TOMLDecodeError):
             # A malformed file is not ours to reinterpret or modify.
             return True
         if isinstance(profiles, dict) and profile_name in profiles:
-            if profiles[profile_name] != expected:
+            if not _legacy_codex_profile_section_is_generated(raw, profile_name, expected):
                 return True
 
     profile_path = codex_dir / f"{profile_name}.config.toml"
@@ -1505,14 +1532,22 @@ def _install_codex_default_llm_profiles(
 
         default_codex = profile["providers"]["codex"]  # type: ignore[index]
         codex_provider = _ensure_codex_profile_provider_mapping(existing_profile)
+        provider_had_profile = "profile" in codex_provider
+        provider_had_model = "model" in codex_provider
+        provider_had_effort = "reasoning_effort" in codex_provider
+        changed = False
         if (
-            "profile" not in codex_provider
-            and "model" not in codex_provider
-            and "reasoning_effort" not in codex_provider
+            not provider_had_profile
+            and not provider_had_model
+            and isinstance(existing_profile.get("model"), str)
+            and existing_profile["model"].strip()
         ):
-            if isinstance(existing_profile.get("model"), str) and existing_profile["model"].strip():
-                codex_provider["model"] = "default"
+            codex_provider["model"] = "default"
+            changed = True
+        if not provider_had_profile and not provider_had_model and not provider_had_effort:
             codex_provider["reasoning_effort"] = default_codex["reasoning_effort"]  # type: ignore[index]
+            changed = True
+        if changed:
             updated_profiles.append(name)
 
     added_role_profiles: list[str] = []
@@ -1721,16 +1756,20 @@ def _managed_codex_setup_paths(codex_home: Path) -> tuple[Path, ...]:
     }
 
     rules_dir = codex_home / "rules"
-    if rules_dir.exists():
+    if rules_dir.is_dir():
         paths.update(
             path
             for path in rules_dir.iterdir()
             if path.name == "ouroboros.md"
             or (path.name.startswith("ouroboros-") and path.suffix == ".md")
         )
+    elif rules_dir.exists():
+        paths.add(rules_dir)
     skills_dir = codex_home / "skills"
-    if skills_dir.exists():
+    if skills_dir.is_dir():
         paths.update(path for path in skills_dir.iterdir() if path.name.startswith("ouroboros-"))
+    elif skills_dir.exists():
+        paths.add(skills_dir)
 
     try:
         from ouroboros.codex import resolve_packaged_codex_assets
