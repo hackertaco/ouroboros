@@ -7,7 +7,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -153,6 +153,18 @@ def _assert_process_local_runtime_contract(contract: dict[str, object]) -> None:
     assert authority["version"] == 1
     assert authority["scope"] == "process_local"
     assert isinstance(authority["correlation_id"], str)
+
+
+def _assert_runtime_identity_observed(contract: dict[str, object]) -> dict[str, object]:
+    routing = contract["model_routing"]
+    assert isinstance(routing, dict)
+    runtime_execution = routing["runtime_execution"]
+    assert isinstance(runtime_execution, dict)
+    assert runtime_execution["version"] == 1
+    assert runtime_execution["observed"] is True
+    identity = runtime_execution["identity"]
+    assert isinstance(identity, dict)
+    return identity
 
 
 @pytest.fixture(autouse=True)
@@ -931,7 +943,7 @@ def test_resume_rejects_base_reasoning_effort_transition(
     resumed = _runner()
     resumed._reasoning_effort = current_effort
 
-    with pytest.raises(OrchestratorError, match="changed route compatibility catalog"):
+    with pytest.raises(OrchestratorError, match="different reasoning effort"):
         resumed._restore_execution_contract({EXECUTION_CONTRACT_PROGRESS_KEY: persisted})
 
 
@@ -960,7 +972,7 @@ def test_dormant_model_routing_still_rejects_reasoning_effort_drift() -> None:
     resumed = _runner()
     resumed._reasoning_effort = "high"
 
-    with pytest.raises(OrchestratorError, match="changed reasoning-effort contract"):
+    with pytest.raises(OrchestratorError, match="different reasoning effort"):
         resumed._restore_execution_contract({EXECUTION_CONTRACT_PROGRESS_KEY: persisted})
 
 
@@ -1287,8 +1299,8 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
         MagicMock(),
     )._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(original_contract)
-    _assert_process_local_runtime_contract(resumed_contract)
+    _assert_runtime_identity_observed(original_contract)
+    _assert_runtime_identity_observed(resumed_contract)
     assert (
         original_contract["foundation_a_authority"]["correlation_id"]
         != resumed_contract["foundation_a_authority"]["correlation_id"]
@@ -1347,8 +1359,8 @@ def test_codex_resolved_fallback_state_stays_out_of_durable_runtime_identity() -
         MagicMock(),
     )._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(original_contract)
-    _assert_process_local_runtime_contract(resumed_contract)
+    _assert_runtime_identity_observed(original_contract)
+    _assert_runtime_identity_observed(resumed_contract)
 
 
 def test_codex_profile_name_alone_stays_process_local(
@@ -1366,7 +1378,7 @@ def test_codex_profile_name_alone_stays_process_local(
     runner = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
     persisted = runner._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(persisted)
+    _assert_runtime_identity_observed(persisted)
 
 
 def test_automatic_codex_default_resume_uses_fingerprinted_native_inputs(
@@ -1534,7 +1546,9 @@ def test_non_codex_subclass_does_not_inherit_codex_profile_as_model_identity(
     runner = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
     persisted = runner._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(persisted)
+    identity = _assert_runtime_identity_observed(persisted)
+    assert identity["kind"] == "goose_v1"
+    assert identity["fallback_model"] is None
 
 
 def test_runtime_model_sentinel_is_not_persisted_as_a_constructor_pin(
@@ -1556,7 +1570,7 @@ def test_runtime_model_sentinel_is_not_persisted_as_a_constructor_pin(
         "observed": True,
         "model": None,
     }
-    _assert_process_local_runtime_contract(persisted)
+    _assert_runtime_identity_observed(persisted)
     # ``default`` is the same automatic Codex sentinel as ``None``.  It has no
     # concrete constructor pin, but the fingerprinted native default inputs
     # make a replay-safe resume possible.
@@ -1605,8 +1619,8 @@ def test_codex_profile_file_changes_do_not_create_a_portable_runtime_identity(
         MagicMock(),
     )._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(original_contract)
-    _assert_process_local_runtime_contract(resumed_contract)
+    _assert_runtime_identity_observed(original_contract)
+    _assert_runtime_identity_observed(resumed_contract)
 
 
 def test_codex_home_changes_do_not_create_a_portable_runtime_identity(
@@ -1641,18 +1655,16 @@ def test_codex_home_changes_do_not_create_a_portable_runtime_identity(
         MagicMock(),
     )._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(original_contract)
-    _assert_process_local_runtime_contract(resumed_contract)
+    _assert_runtime_identity_observed(original_contract)
+    _assert_runtime_identity_observed(resumed_contract)
 
 
-def test_contract_build_never_asks_codex_for_dynamic_execution_identity() -> None:
+def test_contract_build_records_codex_runtime_execution_identity() -> None:
     runtime = CodexCliRuntime(
         cli_path="/bin/echo",
         model=None,
         cwd="/tmp/project",
     )
-    provider = MagicMock(side_effect=AssertionError("dynamic provider must not run"))
-    runtime.execution_identity_contract = provider  # type: ignore[method-assign]
 
     contract = OrchestratorRunner(
         runtime,
@@ -1660,8 +1672,9 @@ def test_contract_build_never_asks_codex_for_dynamic_execution_identity() -> Non
         MagicMock(),
     )._build_execution_contract(seed=_seed())
 
-    _assert_process_local_runtime_contract(contract)
-    provider.assert_not_called()
+    identity = _assert_runtime_identity_observed(contract)
+    assert identity["kind"] == "codex_cli_v1"
+    assert identity["cli_executable_path"] == str(Path("/bin/echo").absolute())
 
 
 @pytest.mark.parametrize(
@@ -1723,7 +1736,7 @@ def test_codex_profile_reasoning_effort_drift_is_rejected_before_command_build(
         ),
     ],
 )
-def test_process_local_runtime_never_recomputes_a_resume_handle_selector(
+def test_runtime_selector_validation_rejects_changed_resume_handle(
     runtime_handle: RuntimeHandle,
 ) -> None:
     runtime = CodexCliRuntime(
@@ -1733,15 +1746,12 @@ def test_process_local_runtime_never_recomputes_a_resume_handle_selector(
     )
     runner = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
     runner._execution_contract = runner._build_execution_contract(seed=_seed())
-    provider = MagicMock(side_effect=AssertionError("selector provider must not run"))
-    runtime.resume_handle_execution_identity_contract = provider  # type: ignore[method-assign]
 
-    runner._validate_resume_handle_execution_identity(runtime_handle)
-
-    provider.assert_not_called()
+    with pytest.raises(OrchestratorError, match="different runtime handle selector"):
+        runner._validate_resume_handle_execution_identity(runtime_handle)
 
 
-def test_process_local_runtime_default_handle_requires_no_persisted_selector() -> None:
+def test_runtime_selector_validation_accepts_default_handle() -> None:
     runtime = CodexCliRuntime(
         cli_path="/bin/echo",
         model=None,
@@ -1749,8 +1759,6 @@ def test_process_local_runtime_default_handle_requires_no_persisted_selector() -
     )
     runner = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
     runner._execution_contract = runner._build_execution_contract(seed=_seed())
-    provider = MagicMock(side_effect=AssertionError("selector provider must not run"))
-    runtime.resume_handle_execution_identity_contract = provider  # type: ignore[method-assign]
 
     runner._validate_resume_handle_execution_identity(
         RuntimeHandle(
@@ -1758,7 +1766,6 @@ def test_process_local_runtime_default_handle_requires_no_persisted_selector() -
             native_session_id="thread-123",
         )
     )
-    provider.assert_not_called()
 
 
 @pytest.mark.parametrize("backend", ["codex_cli", "goose", "pi", "hermes_cli", "opencode"])

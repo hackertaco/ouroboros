@@ -117,6 +117,8 @@ def test_write_syncs_codex_plugin_manifest_version(monkeypatch, tmp_path: Path) 
     claude_plugin = tmp_path / ".claude-plugin" / "plugin.json"
     marketplace = tmp_path / ".claude-plugin" / "marketplace.json"
     codex_plugin = tmp_path / ".codex-plugin" / "plugin.json"
+    source_skill = tmp_path / "skills" / "setup" / "SKILL.md"
+    bundled_skill = tmp_path / ".claude-plugin" / "skills" / "setup" / "SKILL.md"
     for path, payload in (
         (claude_plugin, {"version": "0.50.4"}),
         (marketplace, {"plugins": [{"version": "0.50.4"}]}),
@@ -124,12 +126,17 @@ def test_write_syncs_codex_plugin_manifest_version(monkeypatch, tmp_path: Path) 
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload))
+    source_skill.parent.mkdir(parents=True, exist_ok=True)
+    bundled_skill.parent.mkdir(parents=True, exist_ok=True)
+    source_skill.write_text("<!-- ooo:VERSION:0.50.4 -->\nsource\n")
+    bundled_skill.write_text("<!-- ooo:VERSION:0.50.4 -->\nbundled\n")
 
     monkeypatch.setattr(sync_plugin_version, "ROOT", tmp_path)
     monkeypatch.setattr(sync_plugin_version, "PLUGIN_JSON", claude_plugin)
     monkeypatch.setattr(sync_plugin_version, "MARKETPLACE_JSON", marketplace)
     monkeypatch.setattr(sync_plugin_version, "CODEX_PLUGIN_JSON", codex_plugin)
-    monkeypatch.setattr(sync_plugin_version, "SETUP_SKILL_MD", tmp_path / "missing-skill.md")
+    monkeypatch.setattr(sync_plugin_version, "SETUP_SKILL_MD", source_skill)
+    monkeypatch.setattr(sync_plugin_version, "BUNDLED_SETUP_SKILL_MD", bundled_skill)
     monkeypatch.setattr(
         sys,
         "argv",

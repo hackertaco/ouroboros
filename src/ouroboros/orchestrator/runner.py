@@ -121,6 +121,7 @@ from ouroboros.orchestrator.execution_authority import (
     constructor_model_contract,
     request_process_local_cancellation,
     runtime_effect_capabilities_contract,
+    runtime_execution_identity_contract,
     runtime_execution_proves_effective_model,
     valid_constructor_model_contract,
     valid_process_local_authority_contract,
@@ -3939,14 +3940,8 @@ class OrchestratorRunner:
         return valid_constructor_model_contract(value)
 
     def _runtime_execution_identity_contract(self) -> dict[str, Any]:
-        """Return no cross-process identity for a legacy dynamic runtime.
-
-        Foundation A intentionally does not execute a runtime-owned identity
-        provider here.  That provider may itself resolve mutable helpers,
-        profile files, handler caches, or launcher state.  A live
-        process-local generation below controls same-process resume instead.
-        """
-        return {"version": 1, "observed": False}
+        """Return the adapter's canonical execution identity for resume."""
+        return dict(runtime_execution_identity_contract(self._adapter))
 
     @staticmethod
     def _valid_runtime_execution_identity_contract(value: object) -> bool:
@@ -6133,6 +6128,7 @@ class OrchestratorRunner:
         raw_routing = raw_contract.get("model_routing")
         raw_resume = raw_contract.get("resume")
         raw_preferences = raw_contract.get("execution_preferences")
+        preferences_migrated = "execution_preferences" not in raw_contract
         raw_execution_semantics = raw_contract.get("execution_semantics")
         raw_execution_inputs = raw_contract.get("execution_inputs")
         raw_authority = raw_contract.get("foundation_a_authority")
@@ -6683,10 +6679,17 @@ class OrchestratorRunner:
         # router. Recomputing it from a resumed throwaway worktree would make the
         # same execution appear to be a different experiment.
         self._execution_contract = dict(raw_contract)
-        if preferences_migrated:
+        if preferences_migrated or base_reasoning_effort_missing:
             self._execution_contract["execution_preferences"] = (
                 persisted_preferences.to_contract_data()
             )
+            if base_reasoning_effort_missing:
+                migrated_routing = dict(raw_routing)
+                migrated_routing["base_reasoning_effort"] = None
+                self._execution_contract["model_routing"] = migrated_routing
+                migrated_proof = dict(raw_proof)
+                migrated_proof["routing_fingerprint"] = self._routing_fingerprint(migrated_routing)
+                self._execution_contract["frugality_proof"] = migrated_proof
             return True
         return False
 
