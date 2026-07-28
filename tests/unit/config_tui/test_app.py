@@ -674,6 +674,10 @@ async def test_execute_backend_change_clears_pin_instead_of_persisting_automatic
         await pilot.pause()
         displayed = pilot.app.query_one(f"#stage-model-{Stage.EXECUTE.value}", Select).value
         assert displayed == "claude-opus-4-8"
+        # Textual may deliver the automatic model selection after the
+        # programmatic guard was consumed under full-suite timing. Saving must
+        # still treat this backend-switch default as automatic, not a user pin.
+        pilot.app._explicit_stage_model_changes.add(Stage.EXECUTE.value)
 
         pilot.app.action_save()
         await pilot.pause()

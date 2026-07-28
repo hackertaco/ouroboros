@@ -1013,20 +1013,23 @@ class SettingsApp(App[None]):
                 elif not _is_blank(model_value):
                     automatic_model = self._automatic_stage_model_values.get(stage.value)
                     model_text = str(model_value)
+                    saved_completion_backend = _canonical_backend(
+                        self._saved_completion_backend_from_raw(stage)
+                    )
+                    if (
+                        automatic_model is not None
+                        and model_text == automatic_model
+                        and saved_completion_backend != _canonical_backend(projected_backend)
+                        and get_value(self._raw, model_field.key) is not None
+                    ):
+                        changes[model_field.key] = None
+                        continue
                     if (
                         stage.value not in self._explicit_stage_model_changes
                         and automatic_model is not None
                         and model_text == automatic_model
                     ):
-                        saved_completion_backend = _canonical_backend(
-                            self._saved_completion_backend_from_raw(stage)
-                        )
                         if (
-                            saved_completion_backend != _canonical_backend(projected_backend)
-                            and get_value(self._raw, model_field.key) is not None
-                        ):
-                            changes[model_field.key] = None
-                        elif (
                             model_text == DEFAULT_MODEL_SENTINEL
                             and stage_runtime_field(stage).key in changes
                             and uses_default_model_sentinel(projected_backend)
