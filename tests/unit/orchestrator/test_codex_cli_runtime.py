@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shlex
 import signal
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -105,6 +106,32 @@ def test_build_command_rejects_in_place_codex_cli_change(
 
     with pytest.raises(RuntimeError, match="Codex CLI executable changed"):
         runtime._build_command("/tmp/last-message")
+
+
+def test_build_command_rejects_cli_content_drift_before_version_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replaced executable must never be launched for its version string."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    cli_path = tmp_path / "codex"
+    side_effect = tmp_path / "replacement-ran"
+    cli_path.write_text("#!/bin/sh\necho codex 1.0\n", encoding="utf-8")
+    cli_path.chmod(0o755)
+
+    runtime = CodexCliRuntime(cli_path=cli_path, cwd="/tmp/project", model="gpt-5")
+
+    cli_path.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(side_effect))}\necho codex 2.0\n",
+        encoding="utf-8",
+    )
+    cli_path.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="Codex CLI executable changed"):
+        runtime._build_command("/tmp/last-message")
+    assert not side_effect.exists()
 
 
 def test_codex_config_fingerprint_tracks_handle_selectable_embedded_profiles(
@@ -413,11 +440,11 @@ def test_handle_codex_profile_file_change_invalidates_cached_command_fingerprint
         runtime._build_command("/tmp/last-message", runtime_handle=handle)
 
 
-def test_profile_resolution_fingerprint_preserves_codex_alias_order(
+def test_profile_resolution_fingerprint_canonicalizes_duplicate_codex_alias_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-canonical Codex aliases can affect resolution and must stay ordered."""
+    """Duplicate Codex aliases are one invalid state regardless of insertion order."""
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -450,7 +477,7 @@ def test_profile_resolution_fingerprint_preserves_codex_alias_order(
     with patch("ouroboros.providers.profiles.load_config", return_value=second):
         second_fingerprint = runtime._fingerprint_profile_resolution_config()
 
-    assert first_fingerprint != second_fingerprint
+    assert first_fingerprint == second_fingerprint
 
 
 def test_profile_resolution_fingerprint_canonicalizes_single_codex_alias(

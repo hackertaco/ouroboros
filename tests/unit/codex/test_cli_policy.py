@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -195,6 +196,47 @@ class TestResolveCodexCliPath:
             logger=logger,
             log_namespace="codex_cli_runtime",
         )
+
+        assert resolution.cli_path == str(cli)
+        assert resolution.candidate_path == str(cli)
+
+    def test_canonicalizes_relative_path_lookup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PATH hits from relative PATH entries must be launch-stable."""
+        cli = tmp_path / "bin" / "codex"
+        cli.parent.mkdir()
+        cli = _write_script(cli)
+        logger = _FakeLogger()
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "bin")
+
+        resolution = resolve_codex_cli_path(
+            explicit_cli_path=None,
+            configured_cli_path=None,
+            logger=logger,
+            log_namespace="codex_cli_runtime",
+        )
+
+        assert resolution.cli_path == str(cli)
+        assert resolution.candidate_path == str(cli)
+
+    def test_canonicalizes_bare_which_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Even a bare ``which`` result must be frozen to an absolute path."""
+        cli = _write_script(tmp_path / "codex")
+        logger = _FakeLogger()
+
+        monkeypatch.chdir(tmp_path)
+        with patch("ouroboros.codex.cli_policy._which", return_value="codex"):
+            resolution = resolve_codex_cli_path(
+                explicit_cli_path=None,
+                configured_cli_path=None,
+                logger=logger,
+                log_namespace="codex_cli_runtime",
+            )
 
         assert resolution.cli_path == str(cli)
         assert resolution.candidate_path == str(cli)

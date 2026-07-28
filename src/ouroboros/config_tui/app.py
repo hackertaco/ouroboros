@@ -478,13 +478,13 @@ class SettingsApp(App[None]):
         if profile_default:
             return self._completion_capable_backend(str(profile_default))
 
-        env_runtime = self._runtime_env_override()
-        if env_runtime:
-            return env_runtime
-
         env_llm = os.environ.get("OUROBOROS_LLM_BACKEND", "").strip()
         if env_llm:
             return _canonical_backend(env_llm)
+
+        env_runtime = self._runtime_env_override()
+        if env_runtime:
+            return self._completion_capable_backend(env_runtime)
 
         raw_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key)
         if raw_llm and str(raw_llm).strip().lower() != "claude_code":

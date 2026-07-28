@@ -312,6 +312,7 @@ class CodexCliRuntime:
             self._codex_profile_v2_names = self._codex_profile_v2_names_from_ouroboros_config()
             self._codex_config_fingerprint = self._fingerprint_codex_config_files()
             self._cli_executable_path_identity = self._cli_executable_identity()
+            self._cli_executable_content_identity_snapshot = self._cli_executable_content_identity()
             self._cli_executable_version_identity_snapshot = self._cli_executable_version_identity()
             self._runtime_handle_profile_fingerprints: dict[str, str] = {}
             self._runtime_handle_codex_config_fingerprints: dict[str, str] = {}
@@ -326,6 +327,7 @@ class CodexCliRuntime:
             self._codex_config_fingerprint = None
             self._codex_profile_v2_names = set()
             self._cli_executable_path_identity = None
+            self._cli_executable_content_identity_snapshot = None
             self._cli_executable_version_identity_snapshot = None
             self._runtime_handle_profile_fingerprints = {}
             self._runtime_handle_codex_config_fingerprints = {}
@@ -483,11 +485,9 @@ class CodexCliRuntime:
         executable_path = self._cli_executable_identity()
         if executable_path is None:
             return None
-        try:
-            executable_bytes = Path(executable_path).read_bytes()
-        except OSError:
+        content_digest = self._cli_executable_content_identity()
+        if content_digest is None:
             return None
-        content_digest = hashlib.sha256(executable_bytes).hexdigest()
         try:
             result = subprocess.run(
                 [executable_path, "--version"],
@@ -507,6 +507,17 @@ class CodexCliRuntime:
                 "version_output": version_output,
             }
         )
+
+    def _cli_executable_content_identity(self) -> str | None:
+        """Return the selected CLI byte digest without executing it."""
+        executable_path = self._cli_executable_identity()
+        if executable_path is None:
+            return None
+        try:
+            executable_bytes = Path(executable_path).read_bytes()
+        except OSError:
+            return None
+        return hashlib.sha256(executable_bytes).hexdigest()
 
     def _resolve_skills_dir(self, skills_dir: str | Path | None) -> Path | None:
         """Resolve an optional explicit skill override directory for intercept metadata."""
@@ -676,17 +687,24 @@ class CodexCliRuntime:
             if len(ordered_codex_providers) == 1:
                 _, contract = ordered_codex_providers[0]
                 codex_providers: object = {"codex": contract}
-            elif all(key in {"codex", "codex_cli"} for key, _ in ordered_codex_providers):
-                codex_providers = dict(sorted(ordered_codex_providers))
             else:
-                codex_providers = [
-                    {
-                        "key": key,
-                        "normalized_backend": "codex",
-                        "config": contract,
-                    }
-                    for key, contract in ordered_codex_providers
-                ]
+                # Multiple keys that normalize to Codex are an invalid profile
+                # state. Command resolution rejects it regardless of insertion
+                # order, so the durable fingerprint must represent the same
+                # invalid semantics order-independently instead of blocking
+                # resume for a no-op alias reorder.
+                codex_providers = {
+                    "invalid_duplicate_aliases": sorted(
+                        (
+                            {
+                                "normalized_backend": "codex",
+                                "config": contract,
+                            }
+                            for _, contract in ordered_codex_providers
+                        ),
+                        key=lambda item: json.dumps(item, sort_keys=True),
+                    )
+                }
 
             profile_contract: dict[str, object] = {
                 "model": profile.model,
@@ -912,9 +930,21 @@ class CodexCliRuntime:
         """Fail closed if the selected Codex executable changed in place."""
         if self._runtime_backend != "codex":
             return
+        if self._cli_executable_identity() != self._cli_executable_path_identity:
+            raise RuntimeError(
+                "Codex CLI executable changed after runtime initialization; "
+                "start a new execution session"
+            )
         if (
-            self._cli_executable_identity() == self._cli_executable_path_identity
-            and self._cli_executable_version_identity()
+            self._cli_executable_content_identity()
+            != self._cli_executable_content_identity_snapshot
+        ):
+            raise RuntimeError(
+                "Codex CLI executable changed after runtime initialization; "
+                "start a new execution session"
+            )
+        if (
+            self._cli_executable_version_identity()
             == self._cli_executable_version_identity_snapshot
         ):
             return

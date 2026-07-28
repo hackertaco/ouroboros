@@ -56,10 +56,11 @@ def resolve_codex_cli_path(
     if explicit_cli_path is not None:
         candidate = _normalize_cli_path_candidate(str(explicit_cli_path))
     else:
+        found = _which(default_cli_name) if not configured_cli_path else None
         candidate = (
             _normalize_cli_path_candidate(configured_cli_path)
             if configured_cli_path
-            else _which(default_cli_name) or default_cli_name
+            else _normalize_found_cli_path(found) or default_cli_name
         )
 
     path = Path(candidate).expanduser()
@@ -129,9 +130,9 @@ def find_real_cli(*, default_cli_name: str = DEFAULT_CODEX_CLI_NAME, skip: str) 
         resolved = Path(candidate).resolve()
         if resolved == skip_path:
             continue
-        if is_wrapper_binary(candidate):
+        if is_wrapper_binary(str(resolved)):
             continue
-        return candidate
+        return str(resolved)
     return None
 
 
@@ -175,6 +176,13 @@ def _normalize_cli_path_candidate(candidate: str | None) -> str | None:
     if os.sep in candidate or (os.altsep is not None and os.altsep in candidate):
         return str(expanded.resolve(strict=False))
     return candidate
+
+
+def _normalize_found_cli_path(candidate: str | None) -> str | None:
+    """Return a durable absolute path for an executable discovered on PATH."""
+    if candidate is None:
+        return None
+    return str(Path(candidate).expanduser().resolve(strict=False))
 
 
 __all__ = [

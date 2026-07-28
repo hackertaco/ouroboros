@@ -602,6 +602,18 @@ async def test_env_runtime_override_syncs_llm_backend_to_staged_global_selection
     assert captured["llm.backend"] == "hermes"
 
 
+def test_internal_stage_completion_backend_honors_llm_env_before_runtime_env(
+    app_env, monkeypatch
+) -> None:
+    """TUI model catalogs must follow loader precedence for internal stages."""
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    monkeypatch.setenv("OUROBOROS_LLM_BACKEND", "gemini")
+
+    app = SettingsApp()
+
+    assert app._effective_completion_backend(Stage.INTERVIEW) == "gemini"
+
+
 @pytest.mark.asyncio
 async def test_execute_backend_change_to_codex_clears_stale_execute_model_pin(
     app_env, monkeypatch
