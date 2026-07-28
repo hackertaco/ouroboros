@@ -543,9 +543,7 @@ async def test_save_summary_shows_diff_and_reconnect_hint(app_env, monkeypatch) 
     async with app.run_test() as pilot:
         pilot.app.query_one("#global-runtime", Select).value = "codex"
         await pilot.pause()
-        pilot.app.query_one("#save-button").scroll_visible(animate=False)
-        await pilot.pause()
-        await pilot.click("#save-button")
+        pilot.app.action_save()
         await pilot.pause()
         status = str(pilot.app.query_one("#status-bar", Static).render())
         assert "claude → codex" in status  # old → new diff
