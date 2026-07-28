@@ -264,7 +264,9 @@ def _effective_llm_backend_value(raw_value: object) -> tuple[str, str]:
         return capability.name, "env OUROBOROS_RUNTIME ⚠"
 
     if raw_value is not None:
-        return str(raw_value), "config"
+        normalized = str(raw_value).strip().lower()
+        if normalized != "claude_code":
+            return _normalize_runtime_backend_for_display(normalized), "config"
     return "claude_code", "default"
 
 
@@ -367,7 +369,7 @@ def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: s
     if profile_default:
         return _normalize_runtime_backend_for_display(profile_default)
     llm_value, _ = _effective_llm_backend_value(get_value(data, GLOBAL_LLM_BACKEND_FIELD.key))
-    if llm_value != "claude_code" or get_value(data, GLOBAL_LLM_BACKEND_FIELD.key) is not None:
+    if llm_value != "claude_code":
         return _normalize_runtime_backend_for_display(llm_value)
     return agent_backend
 

@@ -379,6 +379,10 @@ _CODEX_LEGACY_UVX_MCP_ARGS: tuple[tuple[str, ...], ...] = (
     ("--from", "ouroboros-ai", "ouroboros", "mcp", "serve"),
     ("ouroboros", "mcp", "serve"),
 )
+_CODEX_MANAGED_MCP_ENV = {
+    "OUROBOROS_AGENT_RUNTIME": "codex",
+    "OUROBOROS_LLM_BACKEND": "codex",
+}
 _CODEX_DIRECT_MCP_ARGS = ["mcp", "serve", "--runtime", "codex", "--llm-backend", "codex"]
 _CODEX_MODULE_MCP_ARGS = ["-m", "ouroboros", *_CODEX_DIRECT_MCP_ARGS]
 _CODEX_PROFILE_COMMENT = (
@@ -613,6 +617,12 @@ def _is_setup_managed_codex_mcp_entry(
     command = entry.get("command")
     args = entry.get("args")
     if not isinstance(command, str) or not isinstance(args, list):
+        return False
+
+    env = entry.get("env")
+    if env is not None and env != _CODEX_MANAGED_MCP_ENV:
+        return False
+    if set(entry) - {"command", "args", "env"}:
         return False
 
     if command == "uvx":
@@ -1500,6 +1510,8 @@ def _install_codex_default_llm_profiles(
             and "model" not in codex_provider
             and "reasoning_effort" not in codex_provider
         ):
+            if isinstance(existing_profile.get("model"), str) and existing_profile["model"].strip():
+                codex_provider["model"] = "default"
             codex_provider["reasoning_effort"] = default_codex["reasoning_effort"]  # type: ignore[index]
             updated_profiles.append(name)
 
@@ -1524,16 +1536,27 @@ def _print_codex_config_guidance(config_path: Path) -> None:
     )
 
 
-def _install_codex_artifacts() -> bool:
+def _codex_home_candidate_for_setup() -> Path:
+    """Return Codex home exactly as supplied before symlink resolution."""
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".codex"
+
+
+def _install_codex_artifacts(codex_dir: str | Path | None = None) -> bool:
     """Install packaged Ouroboros rules and skills into ~/.codex/."""
     from ouroboros.codex import install_codex_artifacts
 
-    codex_dir = resolve_codex_home()
+    install_target = _codex_home_candidate_for_setup() if codex_dir is None else codex_dir
+    display_dir = Path(install_target).expanduser()
 
     try:
-        result = install_codex_artifacts(codex_dir=codex_dir, prune=True)
+        result = install_codex_artifacts(codex_dir=install_target, prune=True)
         print_success(f"Installed Codex rules → {result.rules_path}")
-        print_success(f"Installed {len(result.skill_paths)} Codex skills → {codex_dir / 'skills'}")
+        print_success(
+            f"Installed {len(result.skill_paths)} Codex skills → {display_dir / 'skills'}"
+        )
         return True
     except (FileNotFoundError, OSError) as exc:
         print_error(f"Could not install packaged Codex rules or skills: {exc}")

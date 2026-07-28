@@ -372,6 +372,36 @@ def test_show_json_normalizes_shipped_stage_defaults_for_codex(monkeypatch, tmp_
         assert payload["stages"][stage]["model_source"] == "automatic Codex selection"
 
 
+def test_show_json_treats_serialized_claude_llm_backend_as_default(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {"runtime_backend": "codex"},
+            "llm": {"backend": "claude_code"},
+            "clarification": {"default_model": "claude-opus-4-8"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex", "claude_code": "/bin/claude"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["defaults"]["llm_backend"] == {"value": "claude_code", "source": "default"}
+    assert payload["stages"]["interview"]["agent"] == "codex"
+    assert payload["stages"]["interview"]["model"] == (
+        "Codex current selected model (concrete model not reported by Codex)"
+    )
+    assert payload["stages"]["interview"]["model_source"] == "automatic Codex selection"
+
+
 def test_show_json_cli_path_follows_effective_runtime_env(monkeypatch, tmp_path) -> None:
     import json
 

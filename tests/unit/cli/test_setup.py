@@ -405,11 +405,11 @@ class TestCodexSetup:
         assert 'command = "uvx"' in contents
         assert f"command = {json.dumps(sys.executable)}" not in contents
 
-    def test_register_codex_mcp_server_rewrites_existing_block_without_timeout(
+    def test_register_codex_mcp_server_preserves_customized_legacy_uvx_by_default(
         self,
         tmp_path: Path,
     ) -> None:
-        """Re-running setup should replace legacy Codex blocks instead of skipping them."""
+        """Auto mode must not delete custom fields from legacy-looking uvx entries."""
         codex_config = tmp_path / ".codex" / "config.toml"
         codex_config.parent.mkdir(parents=True)
         codex_config.write_text(
@@ -441,9 +441,8 @@ class TestCodexSetup:
         assert "[mcp_servers.other]" in contents
         assert contents.count("[mcp_servers.ouroboros]") == 1
         assert contents.count("[mcp_servers.ouroboros.env]") == 1
-        assert 'OUROBOROS_AGENT_RUNTIME = "codex"' in contents
-        assert 'OUROBOROS_LLM_BACKEND = "codex"' in contents
-        assert "tool_timeout_sec" not in contents
+        assert 'OUROBOROS_AGENT_RUNTIME = "claude"' in contents
+        assert "tool_timeout_sec = 600" in contents
 
     def test_register_codex_mcp_server_preserves_url_config_by_default(
         self,
@@ -1113,6 +1112,23 @@ class TestCodexSetup:
         assert any("Installed Codex rules" in message for message in success_messages)
         assert any("Installed 1 Codex skills" in message for message in success_messages)
 
+    def test_install_codex_artifacts_rejects_symlinked_codex_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Setup must pass raw CODEX_HOME so artifact install can fail closed."""
+        real_home = tmp_path / "real-codex-home"
+        real_home.mkdir()
+        codex_home_link = tmp_path / "codex-home-link"
+        try:
+            codex_home_link.symlink_to(real_home, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks are not supported on this platform")
+
+        monkeypatch.setenv("CODEX_HOME", str(codex_home_link))
+
+        assert setup_cmd._install_codex_artifacts() is False
+        assert not (real_home / "rules").exists()
+
     def test_setup_codex_updates_config_and_prints_config_split_guidance(
         self,
         tmp_path: Path,
@@ -1629,6 +1645,31 @@ class TestCodexSetup:
 
         assert resolved.config.model == "user-pin"
         assert resolved.backend_profile == "user-profile"
+
+    def test_codex_setup_neutralizes_existing_profile_top_level_model_for_codex(self) -> None:
+        """Default role profiles must not inherit a user-owned non-Codex model."""
+        config_dict = {
+            "llm_profiles": {
+                "fast": {
+                    "model": "anthropic/custom-fast",
+                    "providers": {},
+                }
+            }
+        }
+
+        setup_cmd._install_codex_default_llm_profiles(config_dict)
+
+        assert config_dict["llm_profiles"]["fast"]["providers"]["codex"] == {
+            "model": "default",
+            "reasoning_effort": "low",
+        }
+        config = OuroborosConfig.model_validate(config_dict)
+        with patch("ouroboros.providers.profiles.load_config", return_value=config):
+            resolved = resolve_completion_profile(
+                CompletionConfig(model="default", role="assertion_extraction"), backend="codex"
+            )
+
+        assert resolved.config.model == "default"
 
     def test_setup_codex_aborts_on_non_mapping_config(self, tmp_path: Path) -> None:
         """Malformed top-level config should not be rewritten by Codex setup."""

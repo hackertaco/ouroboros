@@ -488,7 +488,7 @@ class SettingsApp(App[None]):
             return _canonical_backend(env_llm)
 
         raw_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key)
-        if raw_llm:
+        if raw_llm and str(raw_llm).strip().lower() != "claude_code":
             return _canonical_backend(raw_llm)
 
         return self._completion_capable_backend(self._effective_default_runtime())
@@ -800,10 +800,8 @@ class SettingsApp(App[None]):
         if env_runtime and env_capability is not None and env_capability.supports_llm:
             return env_runtime
 
-        current_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key) or get_value(
-            self._defaults, GLOBAL_LLM_BACKEND_FIELD.key
-        )
-        if current_llm:
+        current_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key)
+        if current_llm and str(current_llm).strip().lower() != "claude_code":
             return _canonical_backend(current_llm)
 
         return self._completion_capable_backend(self._projected_saved_default_runtime())

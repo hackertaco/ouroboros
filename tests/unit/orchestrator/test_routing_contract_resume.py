@@ -1381,10 +1381,10 @@ def test_codex_profile_name_alone_stays_process_local(
     _assert_runtime_identity_observed(persisted)
 
 
-def test_automatic_codex_default_resume_uses_fingerprinted_native_inputs(
+def test_automatic_codex_default_resume_requires_observed_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Codex's model sentinel resumes when all automatic-selection inputs match."""
+    """Fingerprints alone do not prove the App/CLI-selected concrete model."""
     monkeypatch.setattr("ouroboros.config.get_execution_model", lambda: None)
     original_runtime = CodexCliRuntime(
         cli_path="/bin/echo",
@@ -1419,13 +1419,11 @@ def test_automatic_codex_default_resume_uses_fingerprinted_native_inputs(
     resumed_runtime._resolved_fallback_profile = None
     resumed = OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())
 
-    assert (
+    with pytest.raises(OrchestratorError, match="effective runtime model is unverifiable"):
         resumed._restore_execution_contract(
             {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
             seed=_seed(),
         )
-        is False
-    )
 
 
 def test_automatic_codex_default_resume_rejects_a_different_executable_path(
@@ -1572,15 +1570,13 @@ def test_runtime_model_sentinel_is_not_persisted_as_a_constructor_pin(
     }
     _assert_runtime_identity_observed(persisted)
     # ``default`` is the same automatic Codex sentinel as ``None``.  It has no
-    # concrete constructor pin, but the fingerprinted native default inputs
-    # make a replay-safe resume possible.
-    assert (
+    # concrete constructor pin, so a durable resume must fail closed unless the
+    # runtime later exposes the actual App/CLI-selected model.
+    with pytest.raises(OrchestratorError, match="effective runtime model is unverifiable"):
         runner._restore_execution_contract(
             {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
             seed=_seed(),
         )
-        is False
-    )
 
 
 def test_codex_profile_file_changes_do_not_create_a_portable_runtime_identity(
@@ -1942,13 +1938,11 @@ def test_unpinned_kill_switched_runtime_is_limited_to_process_local_resume(
         "model": None,
     }
     _assert_process_local_runtime_contract(persisted)
-    assert (
+    with pytest.raises(OrchestratorError, match="effective runtime model is unverifiable"):
         original._restore_execution_contract(
             {EXECUTION_CONTRACT_PROGRESS_KEY: persisted},
             seed=_seed(),
         )
-        is False
-    )
 
 
 def test_kill_switched_contract_still_rejects_cross_backend_resume(

@@ -101,6 +101,7 @@ class TestRemoveCodexMcp:
             'args = ["ouroboros", "mcp", "serve"]\n\n'
             "[mcp_servers.ouroboros.env]\n"
             'OUROBOROS_AGENT_RUNTIME = "codex"\n\n'
+            'OUROBOROS_LLM_BACKEND = "codex"\n\n'
             "[other]\nfoo = 1\n"
         )
 

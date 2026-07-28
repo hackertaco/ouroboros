@@ -863,6 +863,26 @@ async def test_inherited_internal_stage_model_backend_honors_llm_backend(
         assert pilot.app._projected_completion_backend(Stage.EXECUTE) == "codex"
 
 
+@pytest.mark.asyncio
+async def test_serialized_default_claude_llm_backend_does_not_shadow_codex_agent(
+    app_env, monkeypatch
+) -> None:
+    """A shipped llm.backend default must not load the wrong model catalog."""
+    app_env["orchestrator"]["runtime_backend"] = "codex"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"execute": "codex"}
+    app_env["llm"]["backend"] = "claude_code"
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude_code": "/bin/claude", "codex": "/bin/codex"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app._selected_runtime(Stage.INTERVIEW) == "codex"
+        assert pilot.app._projected_completion_backend(Stage.INTERVIEW) == "codex"
+
+
 def test_blank_internal_model_env_does_not_claim_shadowing(monkeypatch) -> None:
     monkeypatch.setenv("OUROBOROS_CLARIFICATION_MODEL", "")
 
