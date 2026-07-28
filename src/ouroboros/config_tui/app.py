@@ -304,11 +304,16 @@ class SettingsApp(App[None]):
         # Hidden legacy fallback sync for llm.backend after its visible field
         # was removed from the TUI. The most recent Agent selection wins.
         self._last_agent_backend_selection: str | None = None
+        self._hydrating_selects = True
 
     def on_mount(self) -> None:
         # Config-derived (not widget-derived): widgets may still be mounting.
         for backend in {self._effective_stage_backend(stage) for stage in Stage}:
             self._request_model_listing(backend)
+        self.call_after_refresh(self._finish_hydration)
+
+    def _finish_hydration(self) -> None:
+        self._hydrating_selects = False
 
     # ── value helpers ────────────────────────────────────────────────
 
@@ -647,6 +652,10 @@ class SettingsApp(App[None]):
             custom_input.set_class(event.value != CUSTOM_SENTINEL, "hidden")
             is_programmatic = stage.value in self._programmatic_stage_model_changes
             self._programmatic_stage_model_changes.discard(stage.value)
+            if self._hydrating_selects:
+                if not _is_blank(event.value) and event.value != CUSTOM_SENTINEL:
+                    self._last_model_value[stage.value] = str(event.value)
+                return
             if event.value == SEARCH_SENTINEL:
                 self._open_model_search(stage)
             elif not _is_blank(event.value) and event.value != CUSTOM_SENTINEL:
@@ -722,6 +731,37 @@ class SettingsApp(App[None]):
                 fallback=self._projected_saved_default_runtime(),
             )
         return _canonical_backend(value)
+
+    def _projected_completion_backend(self, stage: Stage) -> str:
+        """Return the LLM backend that will interpret this stage's model value."""
+        runtime_backend = self._projected_saved_runtime(stage)
+        capability = get_backend_capability(runtime_backend)
+        if capability is not None and capability.supports_llm:
+            return runtime_backend
+
+        current_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key) or get_value(
+            self._defaults, GLOBAL_LLM_BACKEND_FIELD.key
+        )
+        global_backend = self._projected_saved_default_runtime()
+        global_capability = get_backend_capability(global_backend)
+        if (
+            GLOBAL_RUNTIME_FIELD.key in self._collect_global_runtime_change_keys()
+            and global_capability is not None
+            and global_capability.supports_llm
+        ):
+            return global_backend
+        return _canonical_backend(current_llm)
+
+    def _collect_global_runtime_change_keys(self) -> set[str]:
+        global_runtime = self.query_one("#global-runtime", Select).value
+        if _is_blank(global_runtime):
+            return set()
+        old = get_value(self._raw, GLOBAL_RUNTIME_FIELD.key) or get_value(
+            self._defaults, GLOBAL_RUNTIME_FIELD.key
+        )
+        if _canonical_backend(old) == _canonical_backend(global_runtime):
+            return set()
+        return {GLOBAL_RUNTIME_FIELD.key}
 
     def _refresh_stage_model_options(self, stage: Stage) -> None:
         """Repopulate the model select with the effective backend's catalog.
@@ -859,7 +899,7 @@ class SettingsApp(App[None]):
 
             model_field = STAGE_MODEL_FIELDS.get(stage)
             if model_field is not None:
-                projected_backend = self._projected_saved_runtime(stage)
+                projected_backend = self._projected_completion_backend(stage)
                 model_value = self.query_one(f"#stage-model-{stage.value}", Select).value
                 if model_value == CUSTOM_SENTINEL:
                     custom = self.query_one(
@@ -934,17 +974,14 @@ class SettingsApp(App[None]):
             ):
                 changes["execution.default_model"] = None
 
-            new_backend = (
-                self._last_agent_backend_selection or self._projected_saved_default_runtime()
-            )
-            # Only sync the legacy llm.backend (a completion backend) when the
-            # selected agent is itself completion-capable. Runtime-only backends
-            # (antigravity / grok, supports_llm=False) are not valid llm.backend
-            # values, so leave the existing completion backend untouched rather
-            # than persisting a config that fails validation on next load.
-            capability = get_backend_capability(new_backend) if new_backend else None
-            if new_backend and capability is not None and capability.supports_llm:
-                record_backend(GLOBAL_LLM_BACKEND_FIELD.key, new_backend)
+            if GLOBAL_RUNTIME_FIELD.key in changes:
+                new_backend = self._projected_saved_default_runtime()
+                # Only sync the legacy llm.backend (a completion backend) when the
+                # selected global agent is itself completion-capable. Per-stage
+                # Agent overrides must not mutate unrelated completion fallback.
+                capability = get_backend_capability(new_backend) if new_backend else None
+                if new_backend and capability is not None and capability.supports_llm:
+                    record_backend(GLOBAL_LLM_BACKEND_FIELD.key, new_backend)
 
         return changes
 

@@ -72,7 +72,9 @@ Use `~/.ouroboros/config.yaml` for Ouroboros runtime settings. For everyday mode
 
 Choose **Use Codex default model** to keep Codex's current default model. This is the recommended setting: Ouroboros passes only the role's reasoning effort to each Codex invocation, so a newer model selected in Codex App or CLI is used automatically. Choose a listed model or **Enter another model ID…** only when you deliberately want to pin a model for a stage, including Execute.
 
-Use `~/.codex/config.toml` for the Codex MCP/env hookup and any user-managed native Codex profiles.
+Use `$CODEX_HOME/config.toml` for the Codex MCP/env hookup and any user-managed
+native Codex profiles. If `CODEX_HOME` is unset, Codex uses
+`~/.codex/config.toml`.
 
 If you want Codex-backed Ouroboros roles to use explicit models instead of inheriting Codex CLI's active default/profile, set the existing `config.yaml` keys directly:
 
@@ -291,9 +293,20 @@ npm install -g @openai/codex
 
 See the [Codex CLI README](https://github.com/openai/codex#readme) for alternative installation methods.
 
-### API key errors
+### Authentication errors
 
-Verify your OpenAI API key is set and has access to GPT-5.4:
+Codex CLI can authenticate through the Codex login stored under
+`$CODEX_HOME/auth.json` (or `~/.codex/auth.json` when `CODEX_HOME` is unset), or
+through an OpenAI API key depending on how your Codex CLI is configured.
+
+For OAuth-backed Codex CLI, run:
+
+```bash
+codex login
+```
+
+For API-key-backed Codex CLI, verify your OpenAI API key is set and has access
+to the selected model:
 
 ```bash
 echo $OPENAI_API_KEY  # should be set
@@ -309,7 +322,9 @@ The database will be created automatically at `~/.ouroboros/ouroboros.db`.
 
 ## Cost
 
-Using Codex CLI as the runtime backend requires an OpenAI API key and incurs standard OpenAI API usage charges. Costs depend on:
+Using Codex CLI as the runtime backend uses the authentication and billing path
+configured for your Codex CLI. Depending on your setup, that may be Codex OAuth
+or direct OpenAI API-key usage. Costs depend on:
 
 - Model selected by Codex (**Use Codex default model** is recommended)
 - Task complexity and token usage

@@ -191,7 +191,9 @@ async def test_save_routes_changes_through_validated_persistence(app_env, monkey
 
 
 @pytest.mark.asyncio
-async def test_hidden_llm_backend_syncs_to_latest_stage_agent(app_env, monkeypatch) -> None:
+async def test_per_stage_agent_change_does_not_sync_hidden_llm_backend(
+    app_env, monkeypatch
+) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
 
@@ -204,7 +206,7 @@ async def test_hidden_llm_backend_syncs_to_latest_stage_agent(app_env, monkeypat
         await pilot.pause()
 
     assert captured["orchestrator.runtime_profile.stages.reflect"] == "codex"
-    assert captured["llm.backend"] == "codex"
+    assert "llm.backend" not in captured
 
 
 @pytest.mark.asyncio
@@ -224,6 +226,32 @@ async def test_hidden_llm_backend_preserved_without_agent_change(app_env) -> Non
         # No stage/default Agent selection happened this session.
         changes = pilot.app._collect_changes()
     assert "llm.backend" not in changes
+
+
+@pytest.mark.asyncio
+async def test_untouched_save_does_not_create_stage_model_pins(monkeypatch) -> None:
+    """Initial Select.Changed hydration events are not explicit user edits."""
+    raw = {
+        "orchestrator": {"runtime_backend": "claude", "runtime_profile": {"stages": {}}},
+        "llm": {"backend": "claude_code"},
+        "execution": {"default_model": "claude-sonnet-4-6"},
+    }
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "load_raw_config", lambda: dict(raw))
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex"},
+    )
+    monkeypatch.setattr("ouroboros.config_tui.app.refresh_models", lambda _backend: None)
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert "execution.default_model" not in captured
 
 
 @pytest.mark.asyncio
@@ -760,7 +788,7 @@ async def test_save_reconciles_models_against_post_save_backend_under_env_overri
 
 
 @pytest.mark.asyncio
-async def test_save_uses_stage_agent_for_default_sentinel_validation(monkeypatch) -> None:
+async def test_save_uses_completion_backend_for_default_sentinel_validation(monkeypatch) -> None:
     raw = {
         "orchestrator": {"runtime_backend": "claude"},
         "llm": {"backend": "claude_code"},
@@ -786,7 +814,7 @@ async def test_save_uses_stage_agent_for_default_sentinel_validation(monkeypatch
         await pilot.pause()
 
     assert captured["orchestrator.runtime_profile.stages.interview"] == "codex"
-    assert captured["llm.backend"] == "codex"
+    assert "llm.backend" not in captured
     assert captured["clarification.default_model"] == "default"
 
 
@@ -808,9 +836,38 @@ async def test_save_keeps_default_sentinel_when_llm_backend_supports_it(
         pilot.app.action_save()
         await pilot.pause()
 
-    assert captured["llm.backend"] == "codex"
+    assert "llm.backend" not in captured
     assert captured["orchestrator.runtime_profile.stages.interview"] == "codex"
     assert captured["clarification.default_model"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_runtime_only_agent_default_sentinel_uses_completion_backend(
+    app_env, monkeypatch
+) -> None:
+    """Runtime-only Agents must not persist their sentinel into the LLM backend."""
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {}
+    app_env["llm"]["backend"] = "claude_code"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "antigravity": "/bin/agy"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        stage = Stage.INTERVIEW.value
+        pilot.app.query_one(f"#stage-runtime-{stage}", Select).value = "antigravity"
+        await pilot.pause()
+        assert pilot.app.query_one(f"#stage-model-{stage}", Select).value == "default"
+
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_profile.stages.interview"] == "antigravity"
+    assert "llm.backend" not in captured
+    assert "clarification.default_model" not in captured
 
 
 def test_save_summary_without_backend_change_has_no_reconnect_hint() -> None:

@@ -111,6 +111,25 @@ class TestCodexSetup:
 
         assert detected["codex"] == str(configured)
 
+    def test_detect_runtimes_canonicalizes_relative_path_codex_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative PATH hit must not be persisted relative to a later cwd."""
+        configured = tmp_path / "tools" / "codex"
+        configured.parent.mkdir(parents=True)
+        configured.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        configured.chmod(0o755)
+
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("ouroboros.cli.commands.setup.shutil.which", return_value="tools/codex"),
+            patch("ouroboros.config.get_codex_cli_path", return_value=None),
+            patch("ouroboros.cli.commands.setup._CODEX_APP_CLI_PATH", tmp_path / "app-codex"),
+        ):
+            detected = setup_cmd._detect_runtimes()
+
+        assert detected["codex"] == str(configured)
+
     def test_detect_runtimes_rejects_stale_codex_env_before_path(self, tmp_path: Path) -> None:
         """A stale Codex env path must not be hidden by a valid PATH binary."""
         path_codex = tmp_path / "path" / "codex"
@@ -475,6 +494,40 @@ class TestCodexSetup:
             "[mcp_servers.ouroboros]\n"
             'command = "uvx"\n'
             'args = ["--from", "/opt/private/ouroboros-fork", "ouroboros", "mcp", "serve"]\n',
+            encoding="utf-8",
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            setup_cmd._register_codex_mcp_server()
+
+        contents = codex_config.read_text(encoding="utf-8")
+        assert "/opt/private/ouroboros-fork" in contents
+        assert "ouroboros-ai[mcp]" not in contents
+
+    def test_register_codex_mcp_server_preserves_commented_user_pinned_uvx_from(
+        self, tmp_path: Path
+    ) -> None:
+        """The managed comment alone must not authorize overwriting edited uvx pins."""
+        codex_config = tmp_path / ".codex" / "config.toml"
+        codex_config.parent.mkdir(parents=True)
+        codex_config.write_text(
+            "\n".join(
+                [
+                    "# Ouroboros MCP hookup for Codex CLI.",
+                    "# Keep Ouroboros runtime settings and per-role model overrides in",
+                    "# ~/.ouroboros/config.yaml (for example: clarification.default_model,",
+                    "# llm.qa_model, evaluation.semantic_model, consensus.*).",
+                    "# This file is only for the Codex MCP/env registration block.",
+                    "",
+                    "[mcp_servers.ouroboros]",
+                    'command = "uvx"',
+                    (
+                        'args = ["--from", "/opt/private/ouroboros-fork", '
+                        '"ouroboros", "mcp", "serve"]'
+                    ),
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
 
@@ -1878,6 +1931,39 @@ class TestCodexSetup:
         assert credentials_path.is_symlink()
         assert os.readlink(credentials_path) == str(credentials_target)
         assert not credentials_target.exists()
+
+    def test_setup_codex_restores_config_symlink_chain_target_on_late_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Rollback must restore final targets reached through symlink chains."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        final_target = tmp_path / "actual-config.yaml"
+        final_target.write_text("llm:\n  backend: claude_code\n", encoding="utf-8")
+        middle_link = tmp_path / "middle-config.yaml"
+        middle_link.symlink_to(final_target)
+        config_path = config_dir / "config.yaml"
+        config_path.symlink_to(middle_link)
+        before = final_target.read_text(encoding="utf-8")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts", return_value=True),
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles"),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                side_effect=OSError("worker failed"),
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert config_path.is_symlink()
+        assert os.readlink(config_path) == str(middle_link)
+        assert middle_link.is_symlink()
+        assert os.readlink(middle_link) == str(final_target)
+        assert final_target.read_text(encoding="utf-8") == before
 
 
 class TestClaudeSetup:

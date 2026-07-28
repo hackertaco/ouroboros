@@ -661,6 +661,14 @@ class CodexCliRuntime:
             relevant_role_profiles[handle_role] = role_profile
             relevant_profile_names.add(role_profile)
 
+        # Runtime handles may select `llm_profile` directly through metadata.
+        # After runtime recreation the process-local handle cache is empty, so
+        # the durable identity must already cover every Codex-capable profile a
+        # later handle can name.
+        for name, profile in config.llm_profiles.items():
+            if any(key.strip().lower() in {"codex", "codex_cli"} for key in profile.providers):
+                relevant_profile_names.add(name)
+
         profiles: dict[str, object] = {}
         for name, profile in sorted(config.llm_profiles.items()):
             if name not in relevant_profile_names:
@@ -713,8 +721,9 @@ class CodexCliRuntime:
 
     @staticmethod
     def _codex_home() -> Path:
-        configured = os.environ.get("CODEX_HOME")
-        return Path(configured).expanduser() if configured else Path.home() / ".codex"
+        from ouroboros.codex.home import resolve_codex_home
+
+        return resolve_codex_home()
 
     def _fingerprint_codex_config_files(
         self,
@@ -743,6 +752,14 @@ class CodexCliRuntime:
             if isinstance(profile_name, str) and profile_name.strip():
                 filename = f"{profile_name.strip()}.config.toml"
                 candidates[filename] = codex_home / filename
+        # Runtime handles may select `codex_profile` directly after a resume.
+        # Include all profile-v2 files so durable identity fails closed instead
+        # of accepting current contents as a fresh first command.
+        try:
+            for profile_path in codex_home.glob("*.config.toml"):
+                candidates.setdefault(profile_path.name, profile_path)
+        except OSError as exc:
+            raise RuntimeError("Cannot inspect Codex profile configuration") from exc
 
         digest = hashlib.sha256()
         digest.update(b"ouroboros-codex-config-v1\0")

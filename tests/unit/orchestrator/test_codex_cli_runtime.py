@@ -155,7 +155,7 @@ def test_codex_config_fingerprint_tracks_reachable_embedded_profiles(
     assert runtime._fingerprint_codex_config_files() != original
 
 
-def test_codex_config_fingerprint_ignores_unreachable_profile_v2_files(
+def test_codex_config_fingerprint_tracks_handle_selectable_profile_v2_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,7 +180,7 @@ def test_codex_config_fingerprint_ignores_unreachable_profile_v2_files(
         encoding="utf-8",
     )
 
-    assert runtime._fingerprint_codex_config_files() == original
+    assert runtime._fingerprint_codex_config_files() != original
 
 
 def test_codex_config_fingerprint_tracks_reachable_profile_v2_files(
@@ -235,7 +235,7 @@ def test_profile_fingerprint_preserves_v1_hash_when_effort_is_dormant() -> None:
         )
 
 
-def test_profile_fingerprint_ignores_unreachable_ouroboros_profiles() -> None:
+def test_profile_fingerprint_tracks_handle_selectable_ouroboros_profiles() -> None:
     runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
     first = OuroborosConfig(
         llm_profiles={
@@ -254,7 +254,7 @@ def test_profile_fingerprint_ignores_unreachable_ouroboros_profiles() -> None:
     with patch("ouroboros.providers.profiles.load_config", return_value=first):
         original = runtime._fingerprint_profile_resolution_config()
     with patch("ouroboros.providers.profiles.load_config", return_value=second):
-        assert runtime._fingerprint_profile_resolution_config() == original
+        assert runtime._fingerprint_profile_resolution_config() != original
 
 
 def test_profile_fingerprint_tracks_reachable_ouroboros_profile() -> None:
@@ -329,6 +329,31 @@ def test_handle_llm_profile_change_invalidates_cached_command_fingerprint() -> N
     with patch("ouroboros.providers.profiles.load_config", return_value=second):
         with pytest.raises(RuntimeError, match="profile routing changed"):
             runtime._build_command("/tmp/last-message", runtime_handle=handle)
+
+
+def test_handle_selectable_llm_profile_enters_durable_identity() -> None:
+    """Runtime recreation must not accept changed direct handle profile inputs."""
+    first = OuroborosConfig(
+        llm_profiles={
+            "implementation": {"providers": {"codex": {"model": "gpt-a"}}},
+        },
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "implementation": {"providers": {"codex": {"model": "gpt-b"}}},
+        },
+    )
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        original = CodexCliRuntime(
+            cli_path="/bin/echo", cwd="/tmp/project"
+        ).execution_identity_contract()
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        changed = CodexCliRuntime(
+            cli_path="/bin/echo", cwd="/tmp/project"
+        ).execution_identity_contract()
+
+    assert original["profile_resolution_fingerprint"] != changed["profile_resolution_fingerprint"]
 
 
 def test_handle_codex_profile_file_change_invalidates_cached_command_fingerprint(

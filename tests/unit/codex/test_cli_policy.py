@@ -11,6 +11,7 @@ from ouroboros.codex.cli_policy import (
     is_wrapper_binary,
     resolve_codex_cli_path,
 )
+from ouroboros.codex.home import resolve_codex_home
 
 
 class _FakeLogger:
@@ -220,6 +221,17 @@ class TestBuildCodexChildEnv:
         assert "CLAUDECODE" not in env
         assert env["_OUROBOROS_DEPTH"] == "3"
         assert env["KEEP_ME"] == "ok"
+
+
+class TestResolveCodexHome:
+    def test_relative_env_home_is_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """All Codex callers must share one absolute CODEX_HOME identity."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CODEX_HOME", "relative-codex-home")
+
+        assert resolve_codex_home() == tmp_path / "relative-codex-home"
 
     def test_uses_supplied_error_factory_for_depth_guard(self) -> None:
         """Callers can keep their own exception type while sharing policy."""

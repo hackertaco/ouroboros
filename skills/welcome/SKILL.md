@@ -389,7 +389,7 @@ except Exception:
 prefs.update({
     'welcomeShown': True,
     'welcomeCompleted': datetime.now(UTC).isoformat(),
-    'welcomeVersion': '0.36.0',
+    'welcomeVersion': '0.50.5',
 })
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(prefs, f, indent=2)
@@ -766,7 +766,7 @@ prefs.update({
     'star_asked': True,
     'welcomeShown': True,
     'welcomeCompleted': datetime.now(UTC).isoformat(),
-    'welcomeVersion': '0.36.0',
+    'welcomeVersion': '0.50.5',
 })
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(prefs, f, indent=2)
@@ -792,7 +792,7 @@ except Exception:
 prefs.update({
     'welcomeShown': True,
     'welcomeCompleted': datetime.now(UTC).isoformat(),
-    'welcomeVersion': '0.36.0',
+    'welcomeVersion': '0.50.5',
 })
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(prefs, f, indent=2)
@@ -837,7 +837,7 @@ READY TO BUILD:
 {
   "welcomeShown": true,
   "welcomeCompleted": "2025-02-23T15:30:00+09:00",
-  "welcomeVersion": "0.36.0",
+  "welcomeVersion": "0.50.5",
   "star_asked": true
 }
 ```

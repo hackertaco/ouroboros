@@ -13,6 +13,10 @@ def resolve_codex_home(codex_home: str | Path | None = None) -> Path:
     and settings hints must use that same location as the spawned CLI.
     """
     if codex_home is not None:
-        return Path(codex_home).expanduser()
+        return Path(codex_home).expanduser().resolve(strict=False)
     configured = os.environ.get("CODEX_HOME")
-    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+    return (
+        Path(configured).expanduser().resolve(strict=False)
+        if configured
+        else Path.home() / ".codex"
+    )

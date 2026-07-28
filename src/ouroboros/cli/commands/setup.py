@@ -51,6 +51,7 @@ from ouroboros.cli.opencode_config import (
 from ouroboros.cli.opencode_config import (
     is_bridge_plugin_entry as _is_bridge_plugin_entry,
 )
+from ouroboros.codex.cli_policy import resolve_codex_cli_path
 from ouroboros.codex.home import resolve_codex_home
 from ouroboros.config._model_defaults import (
     DEFAULT_CONSENSUS_OPUS_MODEL,
@@ -59,6 +60,17 @@ from ouroboros.config._model_defaults import (
     recognized_shipped_defaults,
 )
 from ouroboros.persistence.brownfield import BrownfieldStore
+
+
+class _SetupCodexCliLogger:
+    """Small adapter for shared Codex CLI resolution diagnostics."""
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        hint = kwargs.get("hint")
+        print_warning(f"{event}: {hint}" if hint else event)
+
+    def info(self, event: str, **kwargs: object) -> None:
+        print_info(event)
 
 
 def _build_uvx_mcp_args(package_spec: str) -> list[str]:
@@ -173,6 +185,20 @@ def _get_current_backend() -> str | None:
         return None
 
 
+def _resolve_setup_codex_cli_path(
+    *,
+    explicit_cli_path: str | Path | None = None,
+    configured_cli_path: str | None = None,
+) -> str:
+    """Resolve the Codex executable setup will persist and later runtime will use."""
+    return resolve_codex_cli_path(
+        explicit_cli_path=explicit_cli_path,
+        configured_cli_path=configured_cli_path,
+        logger=_SetupCodexCliLogger(),
+        log_namespace="setup.codex",
+    ).cli_path
+
+
 def _detect_runtimes() -> dict[str, str | None]:
     """Detect available runtime CLIs in PATH.
 
@@ -185,12 +211,13 @@ def _detect_runtimes() -> dict[str, str | None]:
         path = shutil.which(name)
         runtimes[name] = path
 
-    # Codex: an explicit environment override is runtime-authoritative. If it
-    # is stale, do not silently fall back to PATH because subsequent execution
-    # would still select the broken env path.
+    # Codex: mirror the shared runtime launch resolver so setup persists the
+    # executable that nested execution will actually use.
     env_codex_path = os.environ.get("OUROBOROS_CODEX_CLI_PATH", "").strip()
     if env_codex_path:
-        configured = Path(env_codex_path).expanduser().resolve(strict=False)
+        configured = Path(
+            _resolve_setup_codex_cli_path(explicit_cli_path=env_codex_path)
+        ).expanduser()
         runtimes["codex"] = (
             str(configured) if configured.is_file() and os.access(configured, os.X_OK) else None
         )
@@ -204,18 +231,29 @@ def _detect_runtimes() -> dict[str, str | None]:
         except Exception:
             codex_path = None
         if codex_path:
-            configured = Path(codex_path).expanduser().resolve(strict=False)
+            configured = Path(
+                _resolve_setup_codex_cli_path(configured_cli_path=codex_path)
+            ).expanduser()
             if configured.is_file() and os.access(configured, os.X_OK):
                 runtimes["codex"] = str(configured)
 
+        if runtimes["codex"] is not None:
+            resolved = Path(
+                _resolve_setup_codex_cli_path(explicit_cli_path=runtimes["codex"])
+            ).expanduser()
+            # Trust `shutil.which`: it already proved PATH executability. This
+            # keeps setup tests hermetic while still canonicalizing relative
+            # PATH entries and wrapper fallbacks through the shared resolver.
+            runtimes["codex"] = str(resolved)
+
         # Codex App bundles this executable but does not always add it to the
         # terminal PATH. Treat it as an available Codex runtime for App-only users.
-        if (
-            runtimes["codex"] is None
-            and _CODEX_APP_CLI_PATH.is_file()
-            and os.access(_CODEX_APP_CLI_PATH, os.X_OK)
-        ):
-            runtimes["codex"] = str(_CODEX_APP_CLI_PATH)
+        if runtimes["codex"] is None and _CODEX_APP_CLI_PATH.is_file():
+            resolved = Path(
+                _resolve_setup_codex_cli_path(explicit_cli_path=_CODEX_APP_CLI_PATH)
+            ).expanduser()
+            if resolved.is_file() and os.access(resolved, os.X_OK):
+                runtimes["codex"] = str(resolved)
 
     # Gemini: prefer explicit-path config (env var / config.yaml) over PATH.
     try:
@@ -578,8 +616,6 @@ def _is_setup_managed_codex_mcp_entry(
         return False
 
     if command == "uvx":
-        if has_managed_comment:
-            return len(args) >= 3 and args[-3:] == ["ouroboros", "mcp", "serve"]
         return tuple(str(arg) for arg in args) in _CODEX_LEGACY_UVX_MCP_ARGS
     if not has_managed_comment:
         return False
@@ -1535,10 +1571,11 @@ class _PathSnapshot:
     link_target_mode: int | None = None
     link_target_contents: bytes | None = None
     link_target_missing: bool = False
+    link_target_snapshot: _PathSnapshot | None = None
     children: tuple[tuple[str, _PathSnapshot], ...] = ()
 
 
-def _snapshot_path(path: Path) -> _PathSnapshot:
+def _snapshot_path(path: Path, *, _seen: frozenset[Path] = frozenset()) -> _PathSnapshot:
     """Snapshot a managed file or directory without following symlinks."""
     try:
         stat_result = path.lstat()
@@ -1551,6 +1588,13 @@ def _snapshot_path(path: Path) -> _PathSnapshot:
         target_path = Path(link_target)
         if not target_path.is_absolute():
             target_path = path.parent / target_path
+        normalized_target = target_path.expanduser().absolute()
+        if normalized_target in _seen:
+            return _PathSnapshot(kind="symlink", mode=mode, link_target=link_target)
+        target_snapshot = _snapshot_path(
+            target_path,
+            _seen=_seen | {path.expanduser().absolute()},
+        )
         try:
             target_stat = target_path.lstat()
         except FileNotFoundError:
@@ -1559,6 +1603,7 @@ def _snapshot_path(path: Path) -> _PathSnapshot:
                 mode=mode,
                 link_target=link_target,
                 link_target_missing=True,
+                link_target_snapshot=target_snapshot,
             )
         if stat.S_ISREG(target_stat.st_mode):
             return _PathSnapshot(
@@ -1567,8 +1612,14 @@ def _snapshot_path(path: Path) -> _PathSnapshot:
                 link_target=link_target,
                 link_target_mode=stat.S_IMODE(target_stat.st_mode),
                 link_target_contents=target_path.read_bytes(),
+                link_target_snapshot=target_snapshot,
             )
-        return _PathSnapshot(kind="symlink", mode=mode, link_target=link_target)
+        return _PathSnapshot(
+            kind="symlink",
+            mode=mode,
+            link_target=link_target,
+            link_target_snapshot=target_snapshot,
+        )
     if stat.S_ISREG(stat_result.st_mode):
         return _PathSnapshot(kind="file", mode=mode, contents=path.read_bytes())
     if not stat.S_ISDIR(stat_result.st_mode):
@@ -1609,7 +1660,9 @@ def _restore_path_snapshot(path: Path, snapshot: _PathSnapshot) -> None:
             target_path = Path(snapshot.link_target)
             if not target_path.is_absolute():
                 target_path = path.parent / target_path
-            if snapshot.link_target_missing:
+            if snapshot.link_target_snapshot is not None:
+                _restore_path_snapshot(target_path, snapshot.link_target_snapshot)
+            elif snapshot.link_target_missing:
                 _remove_path_topology(target_path)
             elif snapshot.link_target_contents is not None:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
