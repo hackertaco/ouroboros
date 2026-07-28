@@ -1809,6 +1809,26 @@ def _restore_managed_codex_setup_paths(
         _restore_path_snapshot(path, path_snapshot, restore_link_targets=False)
 
 
+def _snapshot_created_directory_topology(paths: tuple[Path, ...]) -> dict[Path, bool]:
+    """Record which setup-created parent directories did not exist beforehand."""
+    return {path: path.exists() for path in paths}
+
+
+def _restore_created_directory_topology(snapshot: dict[Path, bool]) -> None:
+    """Remove directories setup created, but only when they are still empty."""
+    for path, existed_before in sorted(
+        snapshot.items(),
+        key=lambda item: len(item[0].parts),
+        reverse=True,
+    ):
+        if existed_before:
+            continue
+        try:
+            path.rmdir()
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            pass
+
+
 def _find_managed_codex_symlink_conflicts(codex_home: Path) -> list[Path]:
     """Return managed Codex paths that setup would write through as symlinks."""
     candidates: set[Path] = {
@@ -1904,8 +1924,18 @@ def _config_execute_runtime_backend(config_dict: dict) -> str:
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
     from ouroboros.config.loader import ensure_config_dir, get_default_config
-    from ouroboros.config.models import get_default_credentials
+    from ouroboros.config.models import get_config_dir, get_default_credentials
 
+    codex_home = resolve_codex_home()
+    config_dir_candidate = get_config_dir()
+    setup_directory_topology_snapshot = _snapshot_created_directory_topology(
+        (
+            config_dir_candidate / "data",
+            config_dir_candidate / "logs",
+            config_dir_candidate,
+            codex_home,
+        )
+    )
     config_dir = ensure_config_dir()
     config_path = config_dir / "config.yaml"
     credentials_path = config_dir / "credentials.yaml"
@@ -1915,12 +1945,14 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         try:
             config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
+            _restore_created_directory_topology(setup_directory_topology_snapshot)
             print_error(f"Could not read config.yaml; aborting without changes: {exc}")
             return False
     else:
         config_dict = get_default_config().model_dump(mode="json")
 
     if not isinstance(config_dict, dict):
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         print_error("Invalid non-mapping config.yaml contents; aborting without changes.")
         return False
 
@@ -1950,6 +1982,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         migrated_legacy_profiles = _migrate_legacy_codex_profile_mappings(config_dict)
         protected_legacy_profiles = _referenced_legacy_codex_profiles(config_dict)
     except ValueError as exc:
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         print_error(f"Invalid config.yaml structure: {exc}")
         print_info("Aborting Codex setup without rewriting config.yaml.")
         return False
@@ -1957,9 +1990,9 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # Register MCP before committing Codex runtime selection.  A config.yaml that
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
-    codex_home = resolve_codex_home()
     topology_conflicts = _find_managed_codex_topology_conflicts(codex_home)
     if topology_conflicts:
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         formatted = ", ".join(str(path) for path in topology_conflicts)
         print_error(
             f"Codex setup refuses to install managed rules/skills over non-directories: {formatted}"
@@ -1968,6 +2001,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         return False
     symlink_conflicts = _find_managed_codex_symlink_conflicts(codex_home)
     if symlink_conflicts:
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         formatted = ", ".join(str(path) for path in symlink_conflicts)
         print_error(f"Codex setup refuses to rewrite managed paths through symlinks: {formatted}")
         print_info("Replace the symlink with a regular Codex config path, then rerun setup.")
@@ -1979,10 +2013,13 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         print_error(f"Could not save Codex MCP config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
         return False
     if not mcp_registered:
+        _restore_managed_codex_setup_paths(managed_codex_snapshot)
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         print_info("Aborting Codex setup without rewriting config.yaml.")
         return False
 
@@ -2001,10 +2038,26 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
         _restore_path_snapshot(config_path, config_snapshot)
         _restore_path_snapshot(credentials_path, credentials_snapshot)
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
         print_error(f"Could not save Codex runtime config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
         return False
 
+    try:
+        # Install Codex-native rules and skills into the active Codex home.
+        if not _install_codex_artifacts():
+            raise OSError("Codex artifact installation failed")
+        _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
+        if not _register_codex_worker_profile(codex_path=codex_path):
+            raise OSError("Codex worker profile registration failed")
+    except (OSError, ValueError) as exc:
+        _restore_managed_codex_setup_paths(managed_codex_snapshot)
+        _restore_path_snapshot(config_path, config_snapshot)
+        _restore_path_snapshot(credentials_path, credentials_snapshot)
+        _restore_created_directory_topology(setup_directory_topology_snapshot)
+        print_error(f"Could not finish Codex setup: {exc}")
+        print_info("Restored Codex and Ouroboros config; setup incomplete.")
+        return False
     print_success(f"Configured Codex runtime (CLI: {codex_path})")
     print_info(f"Config saved to: {config_path}")
     if added_profiles:
@@ -2023,21 +2076,6 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         print_info(
             f"Installed Ouroboros role profile defaults for {len(added_role_profiles)} roles."
         )
-
-    try:
-        # Install Codex-native rules and skills into the active Codex home.
-        if not _install_codex_artifacts():
-            raise OSError("Codex artifact installation failed")
-        _retire_codex_default_profiles(protected_profile_names=protected_legacy_profiles)
-        if not _register_codex_worker_profile(codex_path=codex_path):
-            raise OSError("Codex worker profile registration failed")
-    except (OSError, ValueError) as exc:
-        _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_path_snapshot(config_path, config_snapshot)
-        _restore_path_snapshot(credentials_path, credentials_snapshot)
-        print_error(f"Could not finish Codex setup: {exc}")
-        print_info("Restored Codex and Ouroboros config; setup incomplete.")
-        return False
     _print_codex_config_guidance(config_path)
     return True
 

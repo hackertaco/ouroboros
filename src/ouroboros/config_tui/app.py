@@ -472,12 +472,22 @@ class SettingsApp(App[None]):
 
         stage_value = get_value(self._raw, f"orchestrator.runtime_profile.stages.{stage.value}")
         if stage_value:
-            return self._completion_capable_backend(str(stage_value))
+            return self._completion_capable_backend(
+                str(stage_value),
+                fallback_backend=self._effective_llm_fallback_backend(),
+            )
 
         profile_default = get_value(self._raw, "orchestrator.runtime_profile.default")
         if profile_default:
-            return self._completion_capable_backend(str(profile_default))
+            return self._completion_capable_backend(
+                str(profile_default),
+                fallback_backend=self._effective_llm_fallback_backend(),
+            )
 
+        return self._effective_llm_fallback_backend()
+
+    def _effective_llm_fallback_backend(self) -> str:
+        """Return the loader-equivalent completion fallback before UI edits."""
         env_llm = os.environ.get("OUROBOROS_LLM_BACKEND", "").strip()
         if env_llm:
             return _canonical_backend(env_llm)

@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -287,6 +286,7 @@ class CodexCliRuntime:
         self._cwd = str(Path(cwd).expanduser()) if cwd is not None else os.getcwd()
         self._skills_dir = self._resolve_skills_dir(skills_dir)
         self._skill_dispatcher = skill_dispatcher
+        self._skill_dispatcher_identity = self._fingerprint_skill_dispatcher(skill_dispatcher)
         self._llm_backend = llm_backend or self._default_llm_backend
         self._runtime_profile = runtime_profile
         self._codex_profile = resolve_codex_profile(
@@ -954,12 +954,12 @@ class CodexCliRuntime:
         if self._cli_executable_path_identity is None:
             cli_path = str(self._cli_path)
             cli_candidate = Path(cli_path).expanduser()
-            if not cli_candidate.is_absolute() and shutil.which(cli_path):
+            if not cli_candidate.is_absolute():
                 raise RuntimeError(
                     "Codex CLI executable was unresolved at runtime initialization; "
                     "start a new execution session"
                 )
-            if cli_candidate.is_absolute() and cli_candidate.exists():
+            if cli_candidate.exists():
                 raise RuntimeError(
                     "Codex CLI executable appeared after runtime initialization; "
                     "start a new execution session"
@@ -1006,10 +1006,39 @@ class CodexCliRuntime:
         ]
         return self._hash_json_payload(payload)
 
+    def _fingerprint_skill_dispatcher(
+        self,
+        dispatcher: SkillDispatchHandler | None,
+    ) -> str:
+        """Fingerprint the process-local dispatch callable bound at startup."""
+        if dispatcher is None:
+            return "packaged"
+        return self._hash_json_payload(
+            {
+                "module": getattr(dispatcher, "__module__", None),
+                "qualname": getattr(dispatcher, "__qualname__", None),
+                "identity": id(dispatcher),
+            }
+        )
+
+    def _assert_skill_dispatcher_unchanged(self) -> None:
+        """Fail closed if process-local skill dispatch authority was replaced."""
+        if self._runtime_backend != "codex":
+            return
+        if (
+            self._fingerprint_skill_dispatcher(self._skill_dispatcher)
+            != self._skill_dispatcher_identity
+        ):
+            raise RuntimeError(
+                "Codex skill dispatcher changed after runtime initialization; "
+                "start a new execution session"
+            )
+
     def _assert_skill_dispatch_registry_unchanged(self) -> None:
         """Fail closed if packaged skill dispatch authority changes mid-run."""
         if self._runtime_backend != "codex":
             return
+        self._assert_skill_dispatcher_unchanged()
         if self._skill_dispatch_registry_fingerprint is None:
             raise RuntimeError(
                 "Codex skill dispatch registry was unavailable at runtime initialization; "
@@ -1089,6 +1118,7 @@ class CodexCliRuntime:
                 "llm_backend": normalized_llm_backend,
                 "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
                 "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",
+                "skill_dispatcher_identity": self._skill_dispatcher_identity,
                 "startup_output_timeout_seconds": self._startup_output_timeout_seconds,
                 "stdout_idle_timeout_seconds": self._stdout_idle_timeout_seconds,
             }
@@ -1130,6 +1160,7 @@ class CodexCliRuntime:
             "llm_backend": normalized_llm_backend,
             "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
             "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",
+            "skill_dispatcher_identity": self._skill_dispatcher_identity,
             "skill_dispatch_registry_fingerprint": self._skill_dispatch_registry_fingerprint,
             "startup_output_timeout_seconds": self._startup_output_timeout_seconds,
             "stdout_idle_timeout_seconds": self._stdout_idle_timeout_seconds,

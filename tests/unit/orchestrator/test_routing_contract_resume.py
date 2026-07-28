@@ -1327,6 +1327,7 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
         },
         "runtime_profile": "zep-runtime",
         "skill_dispatcher": "packaged",
+        "skill_dispatcher_identity": "packaged",
         "skill_dispatch_registry_fingerprint": (
             original_runtime._skill_dispatch_registry_fingerprint
         ),

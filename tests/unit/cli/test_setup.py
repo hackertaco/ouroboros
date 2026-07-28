@@ -1406,6 +1406,37 @@ class TestCodexSetup:
         mock_retire.assert_not_called()
         mock_worker_profile.assert_not_called()
 
+    def test_setup_codex_removes_fresh_parent_topology_on_late_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """Fresh setup failure must remove empty config and Codex roots it created."""
+        config_dir = tmp_path / ".ouroboros"
+        codex_home = tmp_path / ".codex"
+
+        def _register(**_kwargs: object) -> bool:
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                '[mcp_servers.ouroboros]\ncommand = "new"\n',
+                encoding="utf-8",
+            )
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", side_effect=_register),
+            patch("ouroboros.cli.commands.setup._install_codex_artifacts", return_value=False),
+            patch("ouroboros.cli.commands.setup._retire_codex_default_profiles") as mock_retire,
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile"
+            ) as mock_worker_profile,
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert not config_dir.exists()
+        assert not codex_home.exists()
+        mock_retire.assert_not_called()
+        mock_worker_profile.assert_not_called()
+
     def test_setup_codex_rolls_back_codex_home_artifacts_when_finish_fails(
         self, tmp_path: Path
     ) -> None:

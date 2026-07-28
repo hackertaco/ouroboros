@@ -236,6 +236,33 @@ def test_show_json_normalizes_runtime_env_backend(monkeypatch, tmp_path) -> None
     assert payload["stages"]["interview"]["agent_installed"] is True
 
 
+def test_show_json_renders_configured_claude_code_llm_backend(monkeypatch, tmp_path) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {"runtime_backend": "codex"},
+            "llm": {"backend": "claude_code"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"codex": "/bin/codex", "claude_code": "/bin/claude"},
+    )
+    monkeypatch.setattr("ouroboros.backends.model_catalog.configured_default_model", lambda _: None)
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["defaults"]["default_agent"]["value"] == "codex"
+    assert payload["defaults"]["llm_backend"]["value"] == "claude_code"
+    assert payload["defaults"]["llm_backend"]["source"] == "config"
+    assert payload["stages"]["interview"]["agent"] == "codex"
+
+
 def test_show_json_preserves_env_stage_model_pin_for_codex(monkeypatch, tmp_path) -> None:
     import json
 
@@ -464,7 +491,7 @@ def test_show_json_normalizes_shipped_stage_defaults_for_codex(monkeypatch, tmp_
         assert payload["stages"][stage]["model_source"] == "automatic Codex selection"
 
 
-def test_show_json_treats_serialized_claude_llm_backend_as_default(monkeypatch, tmp_path) -> None:
+def test_show_json_treats_serialized_claude_llm_backend_as_config(monkeypatch, tmp_path) -> None:
     import json
 
     _show_env(
@@ -486,7 +513,7 @@ def test_show_json_treats_serialized_claude_llm_backend_as_default(monkeypatch, 
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["defaults"]["llm_backend"] == {"value": "codex", "source": "default"}
+    assert payload["defaults"]["llm_backend"] == {"value": "claude_code", "source": "config"}
     assert payload["stages"]["interview"]["agent"] == "codex"
     assert payload["stages"]["interview"]["model"] == (
         "Codex current selected model (concrete model not reported by Codex)"

@@ -1020,6 +1020,32 @@ async def test_runtime_only_agent_default_sentinel_uses_completion_backend(
 
 
 @pytest.mark.asyncio
+async def test_runtime_only_stage_completion_backend_honors_runtime_env(
+    app_env, monkeypatch
+) -> None:
+    """TUI must match loader guard fallback for runtime-only stage agents."""
+    app_env["orchestrator"]["runtime_backend"] = "claude"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"interview": "antigravity"}
+    app_env["llm"]["backend"] = "claude_code"
+    monkeypatch.setenv("OUROBOROS_RUNTIME", "codex")
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {
+            "claude": "/bin/claude",
+            "claude_code": "/bin/claude",
+            "codex": "/bin/codex",
+            "antigravity": "/bin/agy",
+        },
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app._selected_runtime(Stage.INTERVIEW) == "antigravity"
+        assert pilot.app._effective_completion_backend(Stage.INTERVIEW) == "codex"
+
+
+@pytest.mark.asyncio
 async def test_runtime_only_stage_validation_uses_projected_global_llm_backend(
     app_env, monkeypatch
 ) -> None:

@@ -173,10 +173,21 @@ def test_build_command_rejects_bare_cli_that_appears_after_initialization(
     cli_path = tmp_path / "late-codex"
     cli_path.write_text("#!/bin/sh\necho codex 1.0\n", encoding="utf-8")
     cli_path.chmod(0o755)
-    monkeypatch.setattr(
-        "ouroboros.orchestrator.codex_cli_runtime.shutil.which",
-        lambda name: str(cli_path) if name == "late-codex" else None,
-    )
+
+    with pytest.raises(RuntimeError, match="unresolved at runtime initialization"):
+        runtime._build_command("/tmp/last-message")
+
+
+def test_build_command_rejects_bare_cli_that_remains_unresolved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A never-resolved PATH command still has no executable identity."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    runtime = CodexCliRuntime(cli_path="missing-codex", cwd="/tmp/project", model="gpt-5")
 
     with pytest.raises(RuntimeError, match="unresolved at runtime initialization"):
         runtime._build_command("/tmp/last-message")
@@ -218,6 +229,36 @@ def test_skill_dispatch_registry_fingerprint_tracks_mcp_tool_changes(
 
     assert runtime._fingerprint_skill_dispatch_registry() != original
     with pytest.raises(RuntimeError, match="skill dispatch registry changed"):
+        runtime._assert_skill_dispatch_registry_unchanged()
+
+
+def test_skill_dispatch_guard_rejects_process_local_dispatcher_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-process dispatch authority must not be replaceable after init."""
+
+    async def first_dispatcher(_intercept, _handle):
+        return ()
+
+    async def replacement_dispatcher(_intercept, _handle):
+        return ()
+
+    monkeypatch.setattr(
+        "ouroboros.orchestrator.codex_cli_runtime.discover_skill_tool_mappings",
+        lambda _skills_dir=None: (),
+    )
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        cwd="/tmp/project",
+        model="gpt-5",
+        skill_dispatcher=first_dispatcher,
+    )
+    original = runtime.execution_identity_contract()["skill_dispatcher_identity"]
+
+    runtime._skill_dispatcher = replacement_dispatcher
+
+    assert runtime._fingerprint_skill_dispatcher(runtime._skill_dispatcher) != original
+    with pytest.raises(RuntimeError, match="skill dispatcher changed"):
         runtime._assert_skill_dispatch_registry_unchanged()
 
 

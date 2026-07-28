@@ -272,7 +272,9 @@ def _effective_llm_backend_value(
 
     if raw_value is not None:
         normalized = str(raw_value).strip().lower()
-        if normalized != "claude_code":
+        if normalized:
+            if normalized == "claude_code":
+                return "claude_code", "config"
             return _normalize_runtime_backend_for_display(normalized), "config"
     default_backend = _normalize_runtime_backend_for_display(default_agent or "")
     capability = get_backend_capability(default_backend)
