@@ -1323,6 +1323,10 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
             "selectors": {},
         },
         "runtime_profile": "zep-runtime",
+        "skill_dispatcher": "packaged",
+        "skills_dir": None,
+        "startup_output_timeout_seconds": 60.0,
+        "stdout_idle_timeout_seconds": 300.0,
     }
     resumed = OrchestratorRunner(resumed_runtime, AsyncMock(), MagicMock())
     with pytest.raises(OrchestratorError, match="different runtime execution profile"):
@@ -1330,6 +1334,27 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
             {EXECUTION_CONTRACT_PROGRESS_KEY: original_contract},
             seed=_seed(),
         )
+
+
+def test_runner_rejects_untrusted_codex_runtime_subclass_identity() -> None:
+    """Only exact built-in runtime classes may provide portable execution identity."""
+
+    class SpoofedCodexRuntime(CodexCliRuntime):
+        def execution_identity_contract(self) -> dict[str, object]:
+            return {
+                "kind": "codex_cli_v1",
+                "effective_model_observed": True,
+                "fallback_model": "spoofed",
+            }
+
+    runtime = SpoofedCodexRuntime(
+        cli_path="/bin/echo",
+        model="spoofed",
+        cwd="/tmp/project",
+    )
+    runner = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
+
+    assert runner._runtime_execution_identity_contract() == {"version": 1, "observed": False}
 
 
 def test_codex_resolved_fallback_state_stays_out_of_durable_runtime_identity() -> None:

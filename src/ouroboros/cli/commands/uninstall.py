@@ -119,6 +119,7 @@ def _remove_codex_mcp(dry_run: bool) -> bool:
     output: list[str] = []
     skip = False
     in_comment_block = False
+    preserved_table_comments: list[str] = []
 
     for line in lines:
         stripped = line.strip()
@@ -137,15 +138,19 @@ def _remove_codex_mcp(dry_run: bool) -> bool:
             if stripped.startswith("[") and stripped.endswith("]"):
                 # Next TOML table header — stop skipping
                 skip = False
+                if preserved_table_comments:
+                    output.extend(preserved_table_comments)
+                    preserved_table_comments = []
                 output.append(line)
             elif stripped.startswith("#"):
-                # Comment after the managed section — preserve it
-                skip = False
-                output.append(line)
+                preserved_table_comments.append(line)
             # else: key=value lines or blank lines inside the table — skip them
             continue
 
         output.append(line)
+
+    if preserved_table_comments:
+        output.extend(preserved_table_comments)
 
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip() + "\n"
     try:

@@ -3947,8 +3947,21 @@ class OrchestratorRunner:
         # for Ouroboros-owned process runtimes that define the fingerprinting
         # surface; test doubles and legacy/custom adapters remain process-local.
         from ouroboros.orchestrator.codex_cli_runtime import CodexCliRuntime
+        from ouroboros.orchestrator.copilot_cli_runtime import CopilotCliRuntime
+        from ouroboros.orchestrator.gemini_cli_runtime import GeminiCLIRuntime
+        from ouroboros.orchestrator.goose_runtime import GooseCliRuntime
+        from ouroboros.orchestrator.grok_cli_runtime import GrokCliRuntime
+        from ouroboros.orchestrator.zcode_cli_runtime import ZcodeCLIRuntime
 
-        if not isinstance(self._adapter, CodexCliRuntime):
+        trusted_runtime_types = (
+            CodexCliRuntime,
+            CopilotCliRuntime,
+            GeminiCLIRuntime,
+            GooseCliRuntime,
+            GrokCliRuntime,
+            ZcodeCLIRuntime,
+        )
+        if type(self._adapter) not in trusted_runtime_types:
             return {"version": 1, "observed": False}
         return dict(runtime_execution_identity_contract(self._adapter))
 

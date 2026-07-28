@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -186,6 +187,30 @@ class TestRemoveCodexMcp:
         assert "[mcp_servers.ouroboros]" not in content
         assert "# User note about the next section" in content
         assert "[other]" in content
+
+    def test_removes_managed_table_structurally_around_inner_comments(self, tmp_path: Path) -> None:
+        """Comments inside the managed table must not leave orphaned TOML keys."""
+        codex_config = tmp_path / ".codex" / "config.toml"
+        codex_config.parent.mkdir(parents=True)
+        codex_config.write_text(
+            "[mcp_servers.ouroboros]\n"
+            'command = "uvx"\n'
+            "# keep local context\n"
+            'args = ["ouroboros", "mcp", "serve"]\n'
+            "\n"
+            "[other]\nfoo = 1\n"
+        )
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            result = _remove_codex_mcp(dry_run=False)
+
+        assert result is True
+        content = codex_config.read_text()
+        assert "[mcp_servers.ouroboros]" not in content
+        assert 'args = ["ouroboros", "mcp", "serve"]' not in content
+        assert "# keep local context" in content
+        assert "[other]" in content
+        tomllib.loads(content)
 
     def test_preserves_user_managed_url_entry(self, tmp_path: Path) -> None:
         """Uninstall must not delete a custom MCP entry setup auto would preserve."""

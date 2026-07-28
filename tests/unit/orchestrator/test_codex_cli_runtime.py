@@ -355,6 +355,38 @@ def test_handle_selectable_llm_profile_enters_durable_identity() -> None:
     assert original["profile_resolution_fingerprint"] != changed["profile_resolution_fingerprint"]
 
 
+def test_runtime_execution_identity_tracks_constructor_execution_inputs(
+    tmp_path: Path,
+) -> None:
+    """Resume identity must include constructor inputs that affect execution behavior."""
+    first_skills = tmp_path / "skills-a"
+    second_skills = tmp_path / "skills-b"
+    first_skills.mkdir()
+    second_skills.mkdir()
+
+    first = CodexCliRuntime(
+        cli_path="/bin/echo",
+        cwd="/tmp/project",
+        skills_dir=first_skills,
+        startup_output_timeout_seconds=1,
+        stdout_idle_timeout_seconds=2,
+    ).execution_identity_contract()
+    second = CodexCliRuntime(
+        cli_path="/bin/echo",
+        cwd="/tmp/project",
+        skills_dir=second_skills,
+        startup_output_timeout_seconds=3,
+        stdout_idle_timeout_seconds=4,
+    ).execution_identity_contract()
+
+    assert first["skills_dir"] == str(first_skills)
+    assert first["startup_output_timeout_seconds"] == 1
+    assert first["stdout_idle_timeout_seconds"] == 2
+    assert first["skills_dir"] != second["skills_dir"]
+    assert first["startup_output_timeout_seconds"] != second["startup_output_timeout_seconds"]
+    assert first["stdout_idle_timeout_seconds"] != second["stdout_idle_timeout_seconds"]
+
+
 def test_handle_codex_profile_file_change_invalidates_cached_command_fingerprint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

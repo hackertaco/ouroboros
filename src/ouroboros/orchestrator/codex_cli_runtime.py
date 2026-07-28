@@ -980,6 +980,10 @@ class CodexCliRuntime:
                 "fallback_model": constructor_model,
                 "effective_model_observed": constructor_model is not None,
                 "llm_backend": normalized_llm_backend,
+                "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
+                "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",
+                "startup_output_timeout_seconds": self._startup_output_timeout_seconds,
+                "stdout_idle_timeout_seconds": self._stdout_idle_timeout_seconds,
             }
 
         fallback_model = constructor_model
@@ -1017,6 +1021,10 @@ class CodexCliRuntime:
             # can authorize a routing-disabled resume.
             "effective_model_observed": fallback_model is not None,
             "llm_backend": normalized_llm_backend,
+            "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
+            "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",
+            "startup_output_timeout_seconds": self._startup_output_timeout_seconds,
+            "stdout_idle_timeout_seconds": self._stdout_idle_timeout_seconds,
             "profile_resolution_fingerprint": self._profile_resolution_fingerprint,
             "codex_config_fingerprint": self._codex_config_fingerprint,
             "resume_handle_selector": self.resume_handle_execution_identity_contract(None),

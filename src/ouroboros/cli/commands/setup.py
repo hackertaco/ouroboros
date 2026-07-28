@@ -759,6 +759,7 @@ def _upsert_codex_mcp_section(raw: str) -> tuple[str, bool]:
         stripped = input_lines[index].strip()
         if _is_codex_ouroboros_table_header(stripped):
             existed_before = True
+            preserved_comments: list[str] = []
             if not inserted:
                 _trim_managed_codex_comments(output_lines)
                 if output_lines and output_lines[-1].strip():
@@ -772,7 +773,13 @@ def _upsert_codex_mcp_section(raw: str) -> tuple[str, bool]:
                 is_table_header = next_stripped.startswith("[") and next_stripped.endswith("]")
                 if is_table_header and not _is_codex_ouroboros_table_header(next_stripped):
                     break
+                if next_stripped.startswith("#"):
+                    preserved_comments.append(input_lines[index])
                 index += 1
+            if preserved_comments:
+                if output_lines and output_lines[-1].strip():
+                    output_lines.append("")
+                output_lines.extend(preserved_comments)
             continue
 
         output_lines.append(input_lines[index])
@@ -1704,7 +1711,12 @@ def _remove_path_topology(path: Path) -> None:
         path.unlink()
 
 
-def _restore_path_snapshot(path: Path, snapshot: _PathSnapshot) -> None:
+def _restore_path_snapshot(
+    path: Path,
+    snapshot: _PathSnapshot,
+    *,
+    restore_link_targets: bool = True,
+) -> None:
     """Restore one managed path without touching sibling Codex user state."""
     if snapshot.kind == "missing":
         _remove_path_topology(path)
@@ -1719,11 +1731,11 @@ def _restore_path_snapshot(path: Path, snapshot: _PathSnapshot) -> None:
             target_path = Path(snapshot.link_target)
             if not target_path.is_absolute():
                 target_path = path.parent / target_path
-            if snapshot.link_target_snapshot is not None:
+            if restore_link_targets and snapshot.link_target_snapshot is not None:
                 _restore_path_snapshot(target_path, snapshot.link_target_snapshot)
-            elif snapshot.link_target_missing:
+            elif restore_link_targets and snapshot.link_target_missing:
                 _remove_path_topology(target_path)
-            elif snapshot.link_target_contents is not None:
+            elif restore_link_targets and snapshot.link_target_contents is not None:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_bytes(snapshot.link_target_contents)
                 if snapshot.link_target_mode is not None:
@@ -1798,7 +1810,7 @@ def _restore_managed_codex_setup_paths(
 ) -> None:
     """Restore only setup-owned Codex paths captured before setup."""
     for path, path_snapshot in snapshot.items():
-        _restore_path_snapshot(path, path_snapshot)
+        _restore_path_snapshot(path, path_snapshot, restore_link_targets=False)
 
 
 def _snapshot_directory(path: Path) -> dict[Path, bytes]:
@@ -1830,6 +1842,25 @@ def _restore_directory_snapshot(path: Path, snapshot: dict[Path, bytes]) -> None
         target.write_bytes(contents)
 
 
+def _config_execute_runtime_backend(config_dict: dict) -> str:
+    """Return the saved Execute runtime backend using setup's inheritance rules."""
+    orchestrator = config_dict.get("orchestrator")
+    if not isinstance(orchestrator, dict):
+        return "claude"
+    runtime_profile = orchestrator.get("runtime_profile")
+    stage_backend = None
+    profile_default = None
+    if isinstance(runtime_profile, dict):
+        stages = runtime_profile.get("stages")
+        if isinstance(stages, dict):
+            stage_backend = stages.get("execute")
+        profile_default = runtime_profile.get("default")
+    backend = str(
+        stage_backend or profile_default or orchestrator.get("runtime_backend") or "claude"
+    )
+    return "codex" if backend.strip().lower() in {"codex", "codex_cli"} else backend
+
+
 def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     """Configure Ouroboros for the Codex runtime."""
     from ouroboros.config.loader import ensure_config_dir, get_default_config
@@ -1841,7 +1872,11 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     fresh_config = not config_path.exists()
 
     if not fresh_config:
-        config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        try:
+            config_dict = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            print_error(f"Could not read config.yaml; aborting without changes: {exc}")
+            return False
     else:
         config_dict = get_default_config().model_dump(mode="json")
 
@@ -1850,6 +1885,7 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
         return False
 
     try:
+        previous_execute_backend = _config_execute_runtime_backend(config_dict)
         # Set runtime and LLM backend to codex
         orchestrator_config = _ensure_mapping_section(config_dict, "orchestrator")
         orchestrator_config["runtime_backend"] = "codex"
@@ -1862,6 +1898,15 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             config_dict,
             preserve_legacy_model_overrides=not fresh_config,
         )
+        next_execute_backend = _config_execute_runtime_backend(config_dict)
+        execution_config = config_dict.get("execution")
+        if (
+            isinstance(execution_config, dict)
+            and "default_model" in execution_config
+            and previous_execute_backend != next_execute_backend
+            and next_execute_backend == "codex"
+        ):
+            execution_config["default_model"] = None
         migrated_legacy_profiles = _migrate_legacy_codex_profile_mappings(config_dict)
         protected_legacy_profiles = _referenced_legacy_codex_profiles(config_dict)
     except ValueError as exc:
@@ -4031,7 +4076,7 @@ def refresh_artifacts() -> None:
 
     refreshed: list[str] = []
 
-    codex_dir = resolve_codex_home()
+    codex_dir = _codex_home_candidate_for_setup()
     if codex_dir.exists() or shutil.which("codex"):
         from ouroboros.codex import install_codex_artifacts
 

@@ -284,6 +284,37 @@ def test_show_json_uses_stage_llm_backend_for_inherited_internal_models(
     assert payload["stages"]["interview"]["model_source"] == "config"
 
 
+def test_show_json_uses_completion_backend_for_runtime_only_stage_agent(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    _show_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "orchestrator": {
+                "runtime_backend": "claude",
+                "runtime_profile": {"stages": {"interview": "antigravity"}},
+            },
+            "llm": {"backend": "claude_code"},
+            "clarification": {"default_model": "claude-opus-4-8"},
+        },
+    )
+    monkeypatch.setattr(
+        "ouroboros.backends.model_catalog.installed_backends",
+        lambda: {"claude": "/bin/claude", "antigravity": "/bin/agy"},
+    )
+
+    result = runner.invoke(app, ["show", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["stages"]["interview"]["agent"] == "antigravity"
+    assert payload["stages"]["interview"]["model"] == "claude-opus-4-8"
+    assert payload["stages"]["interview"]["model_source"] == "config"
+
+
 def test_show_json_normalizes_execute_current_sentinel_through_loader(
     monkeypatch, tmp_path
 ) -> None:
