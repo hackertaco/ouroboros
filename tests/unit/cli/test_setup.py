@@ -1416,6 +1416,48 @@ class TestCodexSetup:
         assert os.readlink(skill_link) == str(skills_target)
         assert (skills_target / "SKILL.md").read_text(encoding="utf-8") == "old skill\n"
 
+    def test_setup_codex_rollback_preserves_dangling_config_symlink(self, tmp_path: Path) -> None:
+        """Rollback must not unlink a restored dangling config.toml symlink."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        config_path.write_text(
+            "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n",
+            encoding="utf-8",
+        )
+
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        target_dir = tmp_path / "targets"
+        target_dir.mkdir()
+        dangling_target = target_dir / "missing-config.toml"
+        codex_config = codex_home / "config.toml"
+        codex_config.symlink_to(dangling_target)
+
+        def _install_artifacts() -> bool:
+            dangling_target.write_text('model = "new"\n', encoding="utf-8")
+            return True
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch("ouroboros.cli.commands.setup._register_codex_mcp_server", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._install_codex_artifacts",
+                side_effect=_install_artifacts,
+            ),
+            patch("ouroboros.cli.commands.setup._codex_uses_profile_v2", return_value=True),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_worker_profile",
+                return_value=False,
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
+
+        assert codex_config.is_symlink()
+        assert os.readlink(codex_config) == str(dangling_target)
+        assert not dangling_target.exists()
+
     def test_retire_codex_default_profiles_uses_atomic_write_and_propagates_failure(
         self, tmp_path: Path
     ) -> None:

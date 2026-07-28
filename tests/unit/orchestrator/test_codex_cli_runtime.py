@@ -280,6 +280,61 @@ def test_profile_fingerprint_tracks_runtime_profile_role_mapping_when_backend_pr
         assert runtime._fingerprint_profile_resolution_config() != original
 
 
+def test_handle_llm_profile_change_invalidates_cached_command_fingerprint() -> None:
+    """Profiles selected through runtime handle metadata must be frozen per selector."""
+    first = OuroborosConfig(
+        llm_profiles={
+            "implementation": {"providers": {"codex": {"model": "gpt-a"}}},
+        },
+    )
+    second = OuroborosConfig(
+        llm_profiles={
+            "implementation": {"providers": {"codex": {"model": "gpt-b"}}},
+        },
+    )
+    handle = RuntimeHandle(
+        backend="codex_cli",
+        kind="implementation",
+        metadata={"llm_profile": "implementation"},
+    )
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=first):
+        command = runtime._build_command("/tmp/last-message", runtime_handle=handle)
+    assert "--model" in command
+    assert command[command.index("--model") + 1] == "gpt-a"
+
+    with patch("ouroboros.providers.profiles.load_config", return_value=second):
+        with pytest.raises(RuntimeError, match="profile routing changed"):
+            runtime._build_command("/tmp/last-message", runtime_handle=handle)
+
+
+def test_handle_codex_profile_file_change_invalidates_cached_command_fingerprint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex-native profiles selected through handle metadata are command inputs."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    profile_path = codex_home / "custom.config.toml"
+    profile_path.write_text('model_provider = "proxy-a"\n', encoding="utf-8")
+    handle = RuntimeHandle(
+        backend="codex_cli",
+        kind="implementation",
+        metadata={"codex_profile": "custom"},
+    )
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+    command = runtime._build_command("/tmp/last-message", runtime_handle=handle)
+    assert "--profile" in command
+    assert command[command.index("--profile") + 1] == "custom"
+
+    profile_path.write_text('model_provider = "proxy-b"\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Codex configuration changed"):
+        runtime._build_command("/tmp/last-message", runtime_handle=handle)
+
+
 def test_profile_resolution_fingerprint_preserves_codex_alias_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

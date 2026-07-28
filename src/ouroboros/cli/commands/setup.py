@@ -1530,6 +1530,9 @@ class _PathSnapshot:
     mode: int | None = None
     contents: bytes | None = None
     link_target: str | None = None
+    link_target_mode: int | None = None
+    link_target_contents: bytes | None = None
+    link_target_missing: bool = False
     children: tuple[tuple[str, _PathSnapshot], ...] = ()
 
 
@@ -1542,7 +1545,28 @@ def _snapshot_path(path: Path) -> _PathSnapshot:
 
     mode = stat.S_IMODE(stat_result.st_mode)
     if stat.S_ISLNK(stat_result.st_mode):
-        return _PathSnapshot(kind="symlink", mode=mode, link_target=os.readlink(path))
+        link_target = os.readlink(path)
+        target_path = Path(link_target)
+        if not target_path.is_absolute():
+            target_path = path.parent / target_path
+        try:
+            target_stat = target_path.lstat()
+        except FileNotFoundError:
+            return _PathSnapshot(
+                kind="symlink",
+                mode=mode,
+                link_target=link_target,
+                link_target_missing=True,
+            )
+        if stat.S_ISREG(target_stat.st_mode):
+            return _PathSnapshot(
+                kind="symlink",
+                mode=mode,
+                link_target=link_target,
+                link_target_mode=stat.S_IMODE(target_stat.st_mode),
+                link_target_contents=target_path.read_bytes(),
+            )
+        return _PathSnapshot(kind="symlink", mode=mode, link_target=link_target)
     if stat.S_ISREG(stat_result.st_mode):
         return _PathSnapshot(kind="file", mode=mode, contents=path.read_bytes())
     if not stat.S_ISDIR(stat_result.st_mode):
@@ -1580,6 +1604,16 @@ def _restore_path_snapshot(path: Path, snapshot: _PathSnapshot) -> None:
     if snapshot.kind == "symlink":
         if snapshot.link_target is not None:
             os.symlink(snapshot.link_target, path)
+            target_path = Path(snapshot.link_target)
+            if not target_path.is_absolute():
+                target_path = path.parent / target_path
+            if snapshot.link_target_missing:
+                _remove_path_topology(target_path)
+            elif snapshot.link_target_contents is not None:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_bytes(snapshot.link_target_contents)
+                if snapshot.link_target_mode is not None:
+                    target_path.chmod(snapshot.link_target_mode)
         return
 
     if snapshot.kind == "file":
@@ -1721,16 +1755,13 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
     codex_home = resolve_codex_home()
-    codex_config_path = codex_home / "config.toml"
     managed_codex_snapshot = _snapshot_managed_codex_setup_paths(codex_home)
-    codex_config_snapshot = _snapshot_file(codex_config_path)
     config_snapshot = _snapshot_file(config_path)
     credentials_snapshot = _snapshot_file(credentials_path)
     try:
         mcp_registered = _register_codex_mcp_server(mode=mcp_mode)
     except OSError as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         print_error(f"Could not save Codex MCP config: {exc}")
         print_info("Restored Codex MCP config; setup incomplete.")
         return False
@@ -1751,7 +1782,6 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             credentials_path.chmod(0o600)
     except OSError as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
         _restore_file_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not save Codex runtime config: {exc}")
@@ -1786,7 +1816,6 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
             raise OSError("Codex worker profile registration failed")
     except (OSError, ValueError) as exc:
         _restore_managed_codex_setup_paths(managed_codex_snapshot)
-        _restore_file_snapshot(codex_config_path, codex_config_snapshot)
         _restore_file_snapshot(config_path, config_snapshot)
         _restore_file_snapshot(credentials_path, credentials_snapshot)
         print_error(f"Could not finish Codex setup: {exc}")

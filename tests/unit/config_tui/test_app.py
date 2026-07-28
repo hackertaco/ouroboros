@@ -682,6 +682,33 @@ async def test_env_effective_execute_backend_does_not_clear_pin_on_unrelated_sta
 
 
 @pytest.mark.asyncio
+async def test_save_reconciles_models_against_post_save_backend_under_env_override(
+    app_env, monkeypatch
+) -> None:
+    """Env-overridden Codex UI must not leave Codex pins for saved Claude routing."""
+    app_env["orchestrator"]["runtime_backend"] = "hermes"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {}
+    app_env.setdefault("execution", {})["default_model"] = "gpt-5"
+    monkeypatch.setenv("OUROBOROS_AGENT_RUNTIME", "codex")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex", "hermes": "/bin/hermes"},
+    )
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one("#global-runtime", Select).value = "claude"
+        await pilot.pause()
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_backend"] == "claude"
+    assert captured["execution.default_model"] is None
+
+
+@pytest.mark.asyncio
 async def test_save_uses_stage_agent_for_default_sentinel_validation(monkeypatch) -> None:
     raw = {
         "orchestrator": {"runtime_backend": "claude"},

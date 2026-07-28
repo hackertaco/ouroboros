@@ -3941,6 +3941,15 @@ class OrchestratorRunner:
 
     def _runtime_execution_identity_contract(self) -> dict[str, Any]:
         """Return the adapter's canonical execution identity for resume."""
+        # Foundation A process-local authority intentionally does not ask
+        # arbitrary runtime providers for a portable identity.  The durable
+        # identity contract added for native CLI runtimes is only trustworthy
+        # for Ouroboros-owned process runtimes that define the fingerprinting
+        # surface; test doubles and legacy/custom adapters remain process-local.
+        from ouroboros.orchestrator.codex_cli_runtime import CodexCliRuntime
+
+        if not isinstance(self._adapter, CodexCliRuntime):
+            return {"version": 1, "observed": False}
         return dict(runtime_execution_identity_contract(self._adapter))
 
     @staticmethod

@@ -397,6 +397,20 @@ class SettingsApp(App[None]):
             return self._effective_default_runtime()
         return _canonical_backend(global_value)
 
+    def _projected_saved_default_runtime(self) -> str:
+        """Return the default Agent that will be persisted after Save.
+
+        Unlike ``_selected_default_runtime`` this deliberately ignores active
+        environment overrides. Save reconciliation must reason about the config
+        that will remain after the user unsets env vars, not the currently
+        effective runtime injected by the process environment.
+        """
+        global_select = self.query_one("#global-runtime", Select)
+        global_value = global_select.value
+        if not _is_blank(global_value):
+            return _canonical_backend(global_value)
+        return _canonical_backend(self._current(GLOBAL_RUNTIME_FIELD.key))
+
     # ── dynamic model listings ───────────────────────────────────────
 
     def _request_model_listing(self, backend: str) -> None:
@@ -441,6 +455,19 @@ class SettingsApp(App[None]):
             stages=stages,
             default=default,
             fallback=self._effective_default_runtime(),
+        )
+
+    def _saved_stage_backend_from_raw(self, stage: Stage) -> str:
+        """Return the saved stage Agent before staged UI changes, ignoring env."""
+        stage_value = get_value(self._raw, f"orchestrator.runtime_profile.stages.{stage.value}")
+        profile_default = get_value(self._raw, "orchestrator.runtime_profile.default")
+        stages = {stage: _canonical_backend(stage_value)} if stage_value else None
+        default = _canonical_backend(profile_default) if profile_default else None
+        return resolve_runtime_for_stage(
+            stage,
+            stages=stages,
+            default=default,
+            fallback=_canonical_backend(self._current(GLOBAL_RUNTIME_FIELD.key)),
         )
 
     # ── compose ──────────────────────────────────────────────────────
@@ -681,6 +708,21 @@ class SettingsApp(App[None]):
             )
         return _canonical_backend(value)
 
+    def _projected_saved_runtime(self, stage: Stage) -> str:
+        """Return the stage Agent that will be persisted after Save."""
+        runtime_select = self.query_one(f"#stage-runtime-{stage.value}", Select)
+        value = runtime_select.value
+        if value == INHERIT_SENTINEL or _is_blank(value):
+            profile_default = get_value(self._raw, "orchestrator.runtime_profile.default")
+            default = _canonical_backend(profile_default) if profile_default else None
+            return resolve_runtime_for_stage(
+                stage,
+                stages=None,
+                default=default,
+                fallback=self._projected_saved_default_runtime(),
+            )
+        return _canonical_backend(value)
+
     def _refresh_stage_model_options(self, stage: Stage) -> None:
         """Repopulate the model select with the effective backend's catalog.
 
@@ -812,6 +854,7 @@ class SettingsApp(App[None]):
 
             model_field = STAGE_MODEL_FIELDS.get(stage)
             if model_field is not None:
+                projected_backend = self._projected_saved_runtime(stage)
                 model_value = self.query_one(f"#stage-model-{stage.value}", Select).value
                 if model_value == CUSTOM_SENTINEL:
                     custom = self.query_one(
@@ -826,20 +869,20 @@ class SettingsApp(App[None]):
                         and stage.value not in self._explicit_stage_model_changes
                         and automatic_model is not None
                         and str(model_value) == automatic_model
-                        and uses_default_model_sentinel(self._selected_runtime(stage))
+                        and uses_default_model_sentinel(projected_backend)
                     ):
                         continue
                     model_text = str(model_value)
                     if (
                         stage is Stage.EXECUTE
                         and model_text == DEFAULT_MODEL_SENTINEL
-                        and uses_default_model_sentinel(self._selected_runtime(stage))
+                        and uses_default_model_sentinel(projected_backend)
                     ):
                         if get_value(self._raw, model_field.key) is not None:
                             changes[model_field.key] = None
                         continue
                     if model_text == DEFAULT_MODEL_SENTINEL and not uses_default_model_sentinel(
-                        self._selected_runtime(stage)
+                        projected_backend
                     ):
                         if get_value(self._raw, model_field.key) == DEFAULT_MODEL_SENTINEL:
                             changes[model_field.key] = None
@@ -859,8 +902,10 @@ class SettingsApp(App[None]):
             key.startswith("orchestrator.runtime_profile.stages.") for key in changes
         )
         if routing_changed:
-            old_execute_backend = _canonical_backend(self._effective_stage_backend(Stage.EXECUTE))
-            new_execute_backend = _canonical_backend(self._selected_runtime(Stage.EXECUTE))
+            old_execute_backend = _canonical_backend(
+                self._saved_stage_backend_from_raw(Stage.EXECUTE)
+            )
+            new_execute_backend = _canonical_backend(self._projected_saved_runtime(Stage.EXECUTE))
             if (
                 old_execute_backend != new_execute_backend
                 and get_value(self._raw, "execution.default_model") is not None
@@ -881,7 +926,9 @@ class SettingsApp(App[None]):
             ):
                 changes["execution.default_model"] = None
 
-            new_backend = self._last_agent_backend_selection or self._selected_default_runtime()
+            new_backend = (
+                self._last_agent_backend_selection or self._projected_saved_default_runtime()
+            )
             # Only sync the legacy llm.backend (a completion backend) when the
             # selected agent is itself completion-capable. Runtime-only backends
             # (antigravity / grok, supports_llm=False) are not valid llm.backend
