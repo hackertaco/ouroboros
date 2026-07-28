@@ -653,6 +653,14 @@ class SettingsApp(App[None]):
             is_programmatic = stage.value in self._programmatic_stage_model_changes
             self._programmatic_stage_model_changes.discard(stage.value)
             if self._hydrating_selects:
+                model_field = STAGE_MODEL_FIELDS.get(stage)
+                if (
+                    _is_blank(event.value)
+                    and not is_programmatic
+                    and model_field is not None
+                    and get_value(self._raw, model_field.key) is not None
+                ):
+                    self._explicit_stage_model_changes.add(stage.value)
                 if not _is_blank(event.value) and event.value != CUSTOM_SENTINEL:
                     self._last_model_value[stage.value] = str(event.value)
                 return
