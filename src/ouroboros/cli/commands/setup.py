@@ -1769,10 +1769,14 @@ def _managed_codex_setup_paths(codex_home: Path) -> tuple[Path, ...]:
         )
     elif rules_dir.exists():
         paths.add(rules_dir)
+    else:
+        paths.add(rules_dir)
     skills_dir = codex_home / "skills"
     if skills_dir.is_dir():
         paths.update(path for path in skills_dir.iterdir() if path.name.startswith("ouroboros-"))
     elif skills_dir.exists():
+        paths.add(skills_dir)
+    else:
         paths.add(skills_dir)
 
     try:
@@ -1831,6 +1835,21 @@ def _find_managed_codex_symlink_conflicts(codex_home: Path) -> list[Path]:
                 conflicts.append(path)
         except OSError:
             conflicts.append(path)
+    return conflicts
+
+
+def _find_managed_codex_topology_conflicts(codex_home: Path) -> list[Path]:
+    """Return managed Codex directories blocked by non-directory leaves."""
+    conflicts: list[Path] = []
+    for directory in (codex_home / "rules", codex_home / "skills"):
+        try:
+            stat_result = directory.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(stat_result.st_mode):
+            continue
+        if not stat.S_ISDIR(stat_result.st_mode):
+            conflicts.append(directory)
     return conflicts
 
 
@@ -1939,6 +1958,14 @@ def _setup_codex(codex_path: str, *, mcp_mode: CodexMcpMode = "auto") -> bool:
     # says "codex" without a launchable Codex MCP endpoint strands first-use
     # setup in a false-success state.
     codex_home = resolve_codex_home()
+    topology_conflicts = _find_managed_codex_topology_conflicts(codex_home)
+    if topology_conflicts:
+        formatted = ", ".join(str(path) for path in topology_conflicts)
+        print_error(
+            f"Codex setup refuses to install managed rules/skills over non-directories: {formatted}"
+        )
+        print_info("Move or remove the stale file, then rerun setup.")
+        return False
     symlink_conflicts = _find_managed_codex_symlink_conflicts(codex_home)
     if symlink_conflicts:
         formatted = ", ".join(str(path) for path in symlink_conflicts)

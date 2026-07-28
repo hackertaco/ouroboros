@@ -175,6 +175,9 @@ def _normalize_cli_path_candidate(candidate: str | None) -> str | None:
         return str(expanded)
     if os.sep in candidate or (os.altsep is not None and os.altsep in candidate):
         return str(expanded.resolve(strict=False))
+    found = _which(candidate)
+    if found:
+        return _normalize_found_cli_path(found)
     return candidate
 
 

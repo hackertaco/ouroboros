@@ -373,13 +373,11 @@ def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: s
 
     if stage is Stage.EXECUTE:
         return agent_backend
+    stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
     llm_value, llm_source = _effective_llm_backend_value(
         get_value(data, GLOBAL_LLM_BACKEND_FIELD.key),
         default_agent=agent_backend,
     )
-    if llm_source.startswith("env OUROBOROS_LLM_BACKEND"):
-        return _normalize_runtime_backend_for_display(llm_value)
-    stage_agent = get_value(data, f"orchestrator.runtime_profile.stages.{stage.value}")
     if stage_agent:
         stage_backend = _normalize_runtime_backend_for_display(stage_agent)
         capability = get_backend_capability(stage_backend)
@@ -389,9 +387,12 @@ def _stage_model_backend_for_display(stage: object, data: dict, agent_backend: s
         default_backend = _normalize_runtime_backend_for_display(profile_default)
         capability = get_backend_capability(default_backend)
         return default_backend if capability is not None and capability.supports_llm else llm_value
-    if llm_value != "claude_code":
+    if llm_source.startswith("env OUROBOROS_LLM_BACKEND") or llm_value != "claude_code":
         return _normalize_runtime_backend_for_display(llm_value)
-    return agent_backend
+    agent_capability = get_backend_capability(agent_backend)
+    if agent_capability is not None and agent_capability.supports_llm:
+        return agent_backend
+    return llm_value
 
 
 def _resolved_stage_model_for_display(

@@ -52,6 +52,7 @@ from ouroboros.orchestrator.session import (
     SESSION_START_IDENTITY_PROGRESS_KEY,
     SessionRepository,
 )
+from ouroboros.orchestrator.zcode_cli_runtime import ZcodeCLIRuntime
 
 
 def _adapter(
@@ -1326,6 +1327,9 @@ def test_codex_dynamic_profiles_do_not_create_a_portable_resume_identity() -> No
         },
         "runtime_profile": "zep-runtime",
         "skill_dispatcher": "packaged",
+        "skill_dispatch_registry_fingerprint": (
+            original_runtime._skill_dispatch_registry_fingerprint
+        ),
         "skills_dir": None,
         "startup_output_timeout_seconds": 60.0,
         "stdout_idle_timeout_seconds": 300.0,
@@ -1752,6 +1756,59 @@ def test_contract_build_records_codex_runtime_execution_identity() -> None:
     assert identity["cli_executable_path"] == str(Path("/bin/echo").absolute())
 
 
+def test_codex_runtime_with_custom_skills_dir_is_not_portable_identity(tmp_path: Path) -> None:
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        model=None,
+        cwd="/tmp/project",
+        skills_dir=tmp_path,
+    )
+
+    contract = OrchestratorRunner(
+        runtime,
+        AsyncMock(),
+        MagicMock(),
+    )._runtime_execution_identity_contract()
+
+    assert contract == {"version": 1, "observed": False}
+
+
+def test_codex_runtime_with_custom_skill_dispatcher_is_not_portable_identity() -> None:
+    async def _dispatcher(_intercept, _current_handle):
+        return None
+
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        model=None,
+        cwd="/tmp/project",
+        skill_dispatcher=_dispatcher,
+    )
+
+    contract = OrchestratorRunner(
+        runtime,
+        AsyncMock(),
+        MagicMock(),
+    )._runtime_execution_identity_contract()
+
+    assert contract == {"version": 1, "observed": False}
+
+
+def test_zcode_runtime_is_not_trusted_as_portable_identity() -> None:
+    runtime = ZcodeCLIRuntime(
+        cli_path="/tmp/zcode.cjs",
+        model=None,
+        cwd="/tmp/project",
+    )
+
+    contract = OrchestratorRunner(
+        runtime,
+        AsyncMock(),
+        MagicMock(),
+    )._runtime_execution_identity_contract()
+
+    assert contract == {"version": 1, "observed": False}
+
+
 @pytest.mark.parametrize(
     ("original_provider_effort", "drifted_provider_effort"),
     [("xhigh", "low"), (None, None)],
@@ -1898,6 +1955,85 @@ def test_runtime_selector_validation_accepts_default_handle() -> None:
             native_session_id="thread-123",
         )
     )
+
+
+def test_contract_build_binds_inherited_runtime_handle_selector() -> None:
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        model="gpt-pinned",
+        cwd="/tmp/project",
+    )
+    handle = RuntimeHandle(
+        backend="codex_cli",
+        kind="implementation",
+        native_session_id="thread-123",
+        metadata={"llm_role": "agent_runtime_implementation"},
+    )
+
+    contract = OrchestratorRunner(
+        runtime,
+        AsyncMock(),
+        MagicMock(),
+    )._build_execution_contract(seed=_seed(), runtime_handle=handle)
+
+    identity = _assert_runtime_identity_observed(contract)
+    assert identity["resume_handle_selector"] == {
+        "backend": "codex_cli",
+        "kind": "implementation",
+        "selectors": {"llm_role": "agent_runtime_implementation"},
+    }
+
+
+def test_restore_accepts_same_bound_runtime_handle_selector() -> None:
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        model="gpt-pinned",
+        cwd="/tmp/project",
+    )
+    handle = RuntimeHandle(
+        backend="codex_cli",
+        kind="implementation",
+        native_session_id="thread-123",
+        metadata={"llm_role": "agent_runtime_implementation"},
+    )
+    original = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
+    contract = original._build_execution_contract(seed=_seed(), runtime_handle=handle)
+
+    resumed = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
+
+    resumed._restore_execution_contract(
+        {EXECUTION_CONTRACT_PROGRESS_KEY: contract},
+        seed=_seed(),
+        runtime_handle=handle,
+    )
+
+
+def test_restore_rejects_different_bound_runtime_handle_selector() -> None:
+    runtime = CodexCliRuntime(
+        cli_path="/bin/echo",
+        model="gpt-pinned",
+        cwd="/tmp/project",
+    )
+    original_handle = RuntimeHandle(
+        backend="codex_cli",
+        kind="implementation",
+        native_session_id="thread-123",
+        metadata={"llm_role": "agent_runtime_implementation"},
+    )
+    changed_handle = replace(
+        original_handle,
+        metadata={"llm_role": "agent_runtime_review"},
+    )
+    original = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
+    contract = original._build_execution_contract(seed=_seed(), runtime_handle=original_handle)
+
+    resumed = OrchestratorRunner(runtime, AsyncMock(), MagicMock())
+    with pytest.raises(OrchestratorError, match="different runtime execution profile"):
+        resumed._restore_execution_contract(
+            {EXECUTION_CONTRACT_PROGRESS_KEY: contract},
+            seed=_seed(),
+            runtime_handle=changed_handle,
+        )
 
 
 @pytest.mark.parametrize("backend", ["codex_cli", "goose", "pi", "hermes_cli", "opencode"])

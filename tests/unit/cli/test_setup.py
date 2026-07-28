@@ -1462,7 +1462,9 @@ class TestCodexSetup:
         assert config_path.read_text(encoding="utf-8") == original_config
         assert codex_config.read_text(encoding="utf-8") == original_toml
         assert profile_path.read_text(encoding="utf-8") == profile_contents
+        assert not (codex_home / "rules").exists()
         assert not (codex_home / "rules" / "ouroboros.md").exists()
+        assert not (codex_home / "skills").exists()
         assert not (codex_home / "skills" / "ouroboros-welcome").exists()
         assert (codex_home / "sessions" / "active.jsonl").read_text(encoding="utf-8") == (
             "user session created during setup\n"
@@ -1573,6 +1575,29 @@ class TestCodexSetup:
         paths = setup_cmd._managed_codex_setup_paths(codex_home)
 
         assert rules_path in paths
+
+    def test_setup_codex_rejects_stale_rules_file_before_snapshot(self, tmp_path: Path) -> None:
+        """A stale regular rules leaf must be reported without traceback."""
+        config_dir = tmp_path / ".ouroboros"
+        config_dir.mkdir()
+        config_path = config_dir / "config.yaml"
+        config_path.write_text(
+            "orchestrator:\n  runtime_backend: claude\nllm:\n  backend: claude\n",
+            encoding="utf-8",
+        )
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        (codex_home / "rules").write_text("not a directory\n", encoding="utf-8")
+
+        with (
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("ouroboros.config.loader.ensure_config_dir", return_value=config_dir),
+            patch(
+                "ouroboros.cli.commands.setup._register_codex_mcp_server",
+                side_effect=AssertionError("must fail before MCP write"),
+            ),
+        ):
+            assert setup_cmd._setup_codex("/usr/local/bin/codex") is False
 
     def test_legacy_codex_profile_with_comment_is_customized(
         self,

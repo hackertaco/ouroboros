@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -47,6 +48,7 @@ from ouroboros.orchestrator.adapter import (
     SubagentOrchestration,
     TaskResult,
 )
+from ouroboros.orchestrator.skill_tool_mapping import discover_skill_tool_mappings
 from ouroboros.providers.base import CompletionConfig
 from ouroboros.providers.codex_cli_stream import (
     iter_runtime_stream_lines,
@@ -314,6 +316,7 @@ class CodexCliRuntime:
             self._cli_executable_path_identity = self._cli_executable_identity()
             self._cli_executable_content_identity_snapshot = self._cli_executable_content_identity()
             self._cli_executable_version_identity_snapshot = self._cli_executable_version_identity()
+            self._skill_dispatch_registry_fingerprint = self._fingerprint_skill_dispatch_registry()
             self._runtime_handle_profile_fingerprints: dict[str, str] = {}
             self._runtime_handle_codex_config_fingerprints: dict[str, str] = {}
         else:
@@ -329,6 +332,7 @@ class CodexCliRuntime:
             self._cli_executable_path_identity = None
             self._cli_executable_content_identity_snapshot = None
             self._cli_executable_version_identity_snapshot = None
+            self._skill_dispatch_registry_fingerprint = None
             self._runtime_handle_profile_fingerprints = {}
             self._runtime_handle_codex_config_fingerprints = {}
         self._builtin_mcp_handlers: dict[str, Any] | None = None
@@ -820,9 +824,26 @@ class CodexCliRuntime:
                 raise RuntimeError("Cannot read Codex profile configuration") from exc
             if name == "config.toml":
                 contents = self._stable_global_codex_config_bytes(contents)
+            elif name.endswith(".config.toml"):
+                contents = self._stable_codex_profile_config_bytes(contents)
             digest.update(contents)
             digest.update(b"\0")
         return digest.hexdigest()
+
+    @staticmethod
+    def _stable_codex_profile_config_bytes(contents: bytes) -> bytes:
+        """Canonicalize valid profile-v2 TOML for semantic drift checks."""
+        try:
+            parsed = tomllib.loads(contents.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+            return contents
+        return json.dumps(
+            parsed,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            default=str,
+        ).encode("utf-8")
 
     def _stable_global_codex_config_bytes(
         self,
@@ -930,6 +951,20 @@ class CodexCliRuntime:
         """Fail closed if the selected Codex executable changed in place."""
         if self._runtime_backend != "codex":
             return
+        if self._cli_executable_path_identity is None:
+            cli_path = str(self._cli_path)
+            cli_candidate = Path(cli_path).expanduser()
+            if not cli_candidate.is_absolute() and shutil.which(cli_path):
+                raise RuntimeError(
+                    "Codex CLI executable was unresolved at runtime initialization; "
+                    "start a new execution session"
+                )
+            if cli_candidate.is_absolute() and cli_candidate.exists():
+                raise RuntimeError(
+                    "Codex CLI executable appeared after runtime initialization; "
+                    "start a new execution session"
+                )
+            return
         if self._cli_executable_identity() != self._cli_executable_path_identity:
             raise RuntimeError(
                 "Codex CLI executable changed after runtime initialization; "
@@ -952,6 +987,39 @@ class CodexCliRuntime:
             "Codex CLI executable changed after runtime initialization; "
             "start a new execution session"
         )
+
+    def _fingerprint_skill_dispatch_registry(self) -> str | None:
+        """Fingerprint the effective SKILL.md frontmatter dispatch registry."""
+        try:
+            mappings = discover_skill_tool_mappings(self._skills_dir)
+        except (OSError, ValueError):
+            return None
+        payload = [
+            {
+                "skill_name": mapping.skill_name,
+                "mcp_tool": mapping.mcp_tool,
+                "skill_path": mapping.skill_path,
+                "mcp_args": dict(mapping.mcp_args),
+                "context_keys": list(mapping.context_keys),
+            }
+            for mapping in mappings
+        ]
+        return self._hash_json_payload(payload)
+
+    def _assert_skill_dispatch_registry_unchanged(self) -> None:
+        """Fail closed if packaged skill dispatch authority changes mid-run."""
+        if self._runtime_backend != "codex":
+            return
+        if self._skill_dispatch_registry_fingerprint is None:
+            raise RuntimeError(
+                "Codex skill dispatch registry was unavailable at runtime initialization; "
+                "start a new execution session"
+            )
+        if self._fingerprint_skill_dispatch_registry() != self._skill_dispatch_registry_fingerprint:
+            raise RuntimeError(
+                "Codex skill dispatch registry changed after runtime initialization; "
+                "start a new execution session"
+            )
 
     def _assert_profile_resolution_config_unchanged(
         self,
@@ -979,7 +1047,10 @@ class CodexCliRuntime:
             "start a new execution session"
         )
 
-    def execution_identity_contract(self) -> dict[str, Any]:
+    def execution_identity_contract(
+        self,
+        runtime_handle: RuntimeHandle | None = None,
+    ) -> dict[str, Any]:
         """Return the resolved Codex execution identity used across resumes.
 
         ``_model`` alone is not a complete model pin for Codex.  When it is
@@ -1059,11 +1130,14 @@ class CodexCliRuntime:
             "llm_backend": normalized_llm_backend,
             "skills_dir": str(self._skills_dir) if self._skills_dir is not None else None,
             "skill_dispatcher": "custom" if self._skill_dispatcher is not None else "packaged",
+            "skill_dispatch_registry_fingerprint": self._skill_dispatch_registry_fingerprint,
             "startup_output_timeout_seconds": self._startup_output_timeout_seconds,
             "stdout_idle_timeout_seconds": self._stdout_idle_timeout_seconds,
             "profile_resolution_fingerprint": self._profile_resolution_fingerprint,
             "codex_config_fingerprint": self._codex_config_fingerprint,
-            "resume_handle_selector": self.resume_handle_execution_identity_contract(None),
+            "resume_handle_selector": self.resume_handle_execution_identity_contract(
+                runtime_handle
+            ),
         }
 
     def resume_handle_execution_identity_contract(
@@ -1612,6 +1686,7 @@ class CodexCliRuntime:
         current_handle: RuntimeHandle | None,
     ) -> tuple[AgentMessage, ...] | None:
         """Attempt deterministic skill dispatch before invoking Codex."""
+        self._assert_skill_dispatch_registry_unchanged()
         dispatch_result = resolve_skill_dispatch(
             ResolveRequest(
                 prompt=prompt,

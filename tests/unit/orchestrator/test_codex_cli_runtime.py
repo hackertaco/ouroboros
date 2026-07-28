@@ -21,6 +21,7 @@ from ouroboros.mcp.types import ContentType, MCPContentItem, MCPToolResult
 from ouroboros.orchestrator.adapter import AgentMessage, ParamSupport, RuntimeHandle
 import ouroboros.orchestrator.codex_cli_runtime as codex_cli_runtime_module
 from ouroboros.orchestrator.codex_cli_runtime import CodexCliRuntime
+from ouroboros.orchestrator.skill_tool_mapping import SkillToolMapping
 from ouroboros.router import Resolved, ResolveRequest
 from ouroboros.router.dispatch import SkillDispatchRouter as SharedSkillDispatchRouter
 
@@ -86,6 +87,30 @@ def test_codex_config_fingerprint_still_detects_project_runtime_overrides(
         runtime._assert_codex_config_files_unchanged()
 
 
+def test_codex_profile_v2_fingerprint_ignores_comment_only_edits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile-v2 TOML fingerprints should reflect semantics, not formatting."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    profile_path = codex_home / "qa.config.toml"
+    profile_path.write_text(
+        '# comment\nmodel = "gpt-test"\nreasoning_effort = "high"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    runtime = CodexCliRuntime(cli_path="codex", cwd="/tmp/project")
+
+    original = runtime._fingerprint_codex_config_files()
+    profile_path.write_text(
+        'reasoning_effort = "high"\n\n# another comment\nmodel = "gpt-test"\n',
+        encoding="utf-8",
+    )
+
+    assert runtime._fingerprint_codex_config_files() == original
+
+
 def test_build_command_rejects_in_place_codex_cli_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -132,6 +157,68 @@ def test_build_command_rejects_cli_content_drift_before_version_probe(
     with pytest.raises(RuntimeError, match="Codex CLI executable changed"):
         runtime._build_command("/tmp/last-message")
     assert not side_effect.exists()
+
+
+def test_build_command_rejects_bare_cli_that_appears_after_initialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PATH command that was unresolved at init must not be launched later."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    runtime = CodexCliRuntime(cli_path="late-codex", cwd="/tmp/project", model="gpt-5")
+
+    cli_path = tmp_path / "late-codex"
+    cli_path.write_text("#!/bin/sh\necho codex 1.0\n", encoding="utf-8")
+    cli_path.chmod(0o755)
+    monkeypatch.setattr(
+        "ouroboros.orchestrator.codex_cli_runtime.shutil.which",
+        lambda name: str(cli_path) if name == "late-codex" else None,
+    )
+
+    with pytest.raises(RuntimeError, match="unresolved at runtime initialization"):
+        runtime._build_command("/tmp/last-message")
+
+
+def test_skill_dispatch_registry_fingerprint_tracks_mcp_tool_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Packaged skill frontmatter authority must participate in resume identity."""
+    first = (
+        SkillToolMapping(
+            skill_name="auto",
+            mcp_tool="ouroboros_start_auto",
+            skill_path="skills/auto/SKILL.md",
+            mcp_args={},
+            context_keys=(),
+        ),
+    )
+    changed = (
+        SkillToolMapping(
+            skill_name="auto",
+            mcp_tool="ouroboros_run_seed",
+            skill_path="skills/auto/SKILL.md",
+            mcp_args={},
+            context_keys=(),
+        ),
+    )
+    monkeypatch.setattr(
+        "ouroboros.orchestrator.codex_cli_runtime.discover_skill_tool_mappings",
+        lambda _skills_dir=None: first,
+    )
+    runtime = CodexCliRuntime(cli_path="/bin/echo", cwd="/tmp/project", model="gpt-5")
+    original = runtime.execution_identity_contract()["skill_dispatch_registry_fingerprint"]
+
+    monkeypatch.setattr(
+        "ouroboros.orchestrator.codex_cli_runtime.discover_skill_tool_mappings",
+        lambda _skills_dir=None: changed,
+    )
+
+    assert runtime._fingerprint_skill_dispatch_registry() != original
+    with pytest.raises(RuntimeError, match="skill dispatch registry changed"):
+        runtime._assert_skill_dispatch_registry_unchanged()
 
 
 def test_codex_config_fingerprint_tracks_handle_selectable_embedded_profiles(
@@ -751,7 +838,7 @@ class TestCodexCliRuntime:
             resume_session_id="thread-123",
         )
 
-        assert command[:2] == ["codex", "exec"]
+        assert command[1] == "exec"
         assert command[-2:] == ["resume", "thread-123"]
         resume_index = command.index("resume")
         assert command.index("--json") < resume_index

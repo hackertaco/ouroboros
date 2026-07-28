@@ -1019,6 +1019,38 @@ async def test_runtime_only_agent_default_sentinel_uses_completion_backend(
     assert "clarification.default_model" not in captured
 
 
+@pytest.mark.asyncio
+async def test_runtime_only_stage_validation_uses_projected_global_llm_backend(
+    app_env, monkeypatch
+) -> None:
+    """A staged global LLM-capable backend must validate runtime-only stages after save."""
+    app_env["orchestrator"]["runtime_backend"] = "claude"
+    app_env["orchestrator"]["runtime_profile"]["stages"] = {"interview": "antigravity"}
+    app_env["llm"]["backend"] = "claude_code"
+    app_env.setdefault("clarification", {})["default_model"] = "claude-opus-4-8"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(persistence, "apply_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        "ouroboros.config_tui.app.installed_backends",
+        lambda: {"claude": "/bin/claude", "codex": "/bin/codex", "antigravity": "/bin/agy"},
+    )
+    monkeypatch.setattr("ouroboros.config_tui.app.refresh_models", lambda _backend: None)
+    monkeypatch.setattr("ouroboros.config_tui.app.configured_default_model", lambda _backend: None)
+
+    app = SettingsApp()
+    async with app.run_test() as pilot:
+        pilot.app.query_one("#global-runtime", Select).value = "codex"
+        await pilot.pause()
+
+        assert pilot.app._projected_completion_backend(Stage.INTERVIEW) == "codex"
+        pilot.app.action_save()
+        await pilot.pause()
+
+    assert captured["orchestrator.runtime_backend"] == "codex"
+    assert captured["llm.backend"] == "codex"
+    assert captured["clarification.default_model"] is None
+
+
 def test_save_summary_without_backend_change_has_no_reconnect_hint() -> None:
     summary = SettingsApp._save_summary(
         {"clarification.default_model": "m2"}, {"clarification.default_model": "m1"}

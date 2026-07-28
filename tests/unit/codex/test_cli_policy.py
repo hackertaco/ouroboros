@@ -241,6 +241,25 @@ class TestResolveCodexCliPath:
         assert resolution.cli_path == str(cli)
         assert resolution.candidate_path == str(cli)
 
+    def test_canonicalizes_configured_bare_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured bare command must be frozen through PATH lookup."""
+        cli = _write_script(tmp_path / "codex")
+        logger = _FakeLogger()
+
+        monkeypatch.chdir(tmp_path)
+        with patch("ouroboros.codex.cli_policy._which", return_value="codex"):
+            resolution = resolve_codex_cli_path(
+                explicit_cli_path=None,
+                configured_cli_path="codex",
+                logger=logger,
+                log_namespace="codex_cli_runtime",
+            )
+
+        assert resolution.cli_path == str(cli)
+        assert resolution.candidate_path == str(cli)
+
 
 class TestBuildCodexChildEnv:
     def test_strips_recursive_markers_and_increments_depth(self) -> None:

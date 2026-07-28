@@ -3939,7 +3939,10 @@ class OrchestratorRunner:
         """Return whether a persisted constructor-model contract is canonical."""
         return valid_constructor_model_contract(value)
 
-    def _runtime_execution_identity_contract(self) -> dict[str, Any]:
+    def _runtime_execution_identity_contract(
+        self,
+        runtime_handle: RuntimeHandle | None = None,
+    ) -> dict[str, Any]:
         """Return the adapter's canonical execution identity for resume."""
         # Foundation A process-local authority intentionally does not ask
         # arbitrary runtime providers for a portable identity.  The durable
@@ -3951,7 +3954,6 @@ class OrchestratorRunner:
         from ouroboros.orchestrator.gemini_cli_runtime import GeminiCLIRuntime
         from ouroboros.orchestrator.goose_runtime import GooseCliRuntime
         from ouroboros.orchestrator.grok_cli_runtime import GrokCliRuntime
-        from ouroboros.orchestrator.zcode_cli_runtime import ZcodeCLIRuntime
 
         trusted_runtime_types = (
             CodexCliRuntime,
@@ -3959,11 +3961,24 @@ class OrchestratorRunner:
             GeminiCLIRuntime,
             GooseCliRuntime,
             GrokCliRuntime,
-            ZcodeCLIRuntime,
         )
         if type(self._adapter) not in trusted_runtime_types:
             return {"version": 1, "observed": False}
-        return dict(runtime_execution_identity_contract(self._adapter))
+        if (
+            getattr(self._adapter, "_skills_dir", None) is not None
+            or getattr(self._adapter, "_skill_dispatcher", None) is not None
+        ):
+            return {"version": 1, "observed": False}
+        if runtime_handle is None:
+            return dict(runtime_execution_identity_contract(self._adapter))
+        provider = object.__getattribute__(self._adapter, "execution_identity_contract")
+        identity = provider(runtime_handle)
+        if not isinstance(identity, Mapping):
+            raise ValueError("runtime execution identity contract is not a mapping")
+        normalized = dict(identity)
+        if not normalized:
+            return {"version": 1, "observed": False}
+        return {"version": 1, "observed": True, "identity": normalized}
 
     @staticmethod
     def _valid_runtime_execution_identity_contract(value: object) -> bool:
@@ -5465,6 +5480,7 @@ class OrchestratorRunner:
         seed_fingerprint: str | None = None,
         authority_generation: _ProcessLocalAuthorityGeneration | None = None,
         execution_inputs_contract: Mapping[str, Any] | None = None,
+        runtime_handle: RuntimeHandle | None = None,
     ) -> dict[str, Any]:
         """Build the durable resolved inputs shared by resume and proof cohorting."""
         from ouroboros.orchestrator.model_routing import serialize_model_router
@@ -5506,7 +5522,9 @@ class OrchestratorRunner:
         # change cannot silently alter ``model_reasoning_effort`` on resume.
         routing_contract["base_reasoning_effort"] = self._reasoning_effort
         routing_contract["constructor_model"] = self._constructor_model_contract()
-        routing_contract["runtime_execution"] = self._runtime_execution_identity_contract()
+        routing_contract["runtime_execution"] = self._runtime_execution_identity_contract(
+            runtime_handle
+        )
         routing_contract["runtime_backend"] = self._runtime_backend_contract()
         routing_contract["llm_backend"] = self._llm_backend_contract()
         routing_contract["permission_mode"] = self._permission_mode_contract()
@@ -6017,6 +6035,7 @@ class OrchestratorRunner:
         authority_generation: _ProcessLocalAuthorityGeneration | None = None,
         require_bound_execution_inputs: bool = True,
         prepared_live_execution: bool = False,
+        runtime_handle: RuntimeHandle | None = None,
     ) -> bool:
         """Restore the persisted router unless this invocation explicitly overrides it.
 
@@ -6414,7 +6433,7 @@ class OrchestratorRunner:
                     ),
                 },
             )
-        current_runtime_execution = self._runtime_execution_identity_contract()
+        current_runtime_execution = self._runtime_execution_identity_contract(runtime_handle)
         if persisted_runtime_execution != current_runtime_execution:
             raise OrchestratorError(
                 message="Cannot resume with a different runtime execution profile",
@@ -6609,6 +6628,7 @@ class OrchestratorRunner:
                 seed_fingerprint=(persisted_seed_fingerprint if valid_seed_fingerprint else None),
                 authority_generation=authority_generation,
                 execution_inputs_contract=normalized_execution_inputs,
+                runtime_handle=runtime_handle,
             )
             # Only the public resume path reaches this branch with a live,
             # registry-issued generation.  Preserve the persisted diagnostics
@@ -6626,6 +6646,7 @@ class OrchestratorRunner:
                 seed=seed,
                 seed_fingerprint=(persisted_seed_fingerprint if valid_seed_fingerprint else None),
                 authority_generation=authority_generation,
+                runtime_handle=runtime_handle,
             )
             if authority_generation is None:
                 replacement["foundation_a_authority"] = dict(raw_contract["foundation_a_authority"])
@@ -6660,6 +6681,7 @@ class OrchestratorRunner:
         authority_generation: _ProcessLocalAuthorityGeneration | None = None,
         require_bound_execution_inputs: bool = True,
         prepared_live_execution: bool = False,
+        runtime_handle: RuntimeHandle | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """Restore and return one immutable invocation-local contract snapshot.
 
@@ -6675,6 +6697,7 @@ class OrchestratorRunner:
                 authority_generation=authority_generation,
                 require_bound_execution_inputs=require_bound_execution_inputs,
                 prepared_live_execution=prepared_live_execution,
+                runtime_handle=runtime_handle,
             )
             if not isinstance(self._execution_contract, Mapping):
                 raise OrchestratorError(
@@ -8431,6 +8454,7 @@ class OrchestratorRunner:
                 self._build_execution_contract,
                 seed=seed,
                 authority_generation=authority_generation,
+                runtime_handle=self._inherited_runtime_handle,
             )
             self._execution_guidance_delivery_mode()
             # Establish the exact capability and PID liveness lease before any
@@ -10829,11 +10853,16 @@ class OrchestratorRunner:
             )
 
         try:
+            runtime_handle = self._deserialize_runtime_handle(tracker.progress)
+            runtime_handle = self._force_runtime_handle_permission(runtime_handle)
+            self._validate_runtime_handle_backend(runtime_handle)
+            self._validate_bound_runtime_resume_identity(tracker.progress, runtime_handle)
             execution_contract_changed, execution_contract = await asyncio.to_thread(
                 self._restore_execution_contract_snapshot,
                 tracker.progress,
                 seed=seed,
                 authority_generation=authority_generation,
+                runtime_handle=runtime_handle,
             )
             execution_semantics = self._execution_semantics_snapshot(execution_contract)
             self._execution_guidance_delivery_mode()
@@ -10955,11 +10984,6 @@ class OrchestratorRunner:
 
 Note: This is a resumed session. Please continue from where execution was interrupted.
 """
-            # Get runtime resume state if stored
-            runtime_handle = self._deserialize_runtime_handle(tracker.progress)
-            runtime_handle = self._force_runtime_handle_permission(runtime_handle)
-            self._validate_runtime_handle_backend(runtime_handle)
-            self._validate_bound_runtime_resume_identity(tracker.progress, runtime_handle)
             self._validate_resume_handle_execution_identity(runtime_handle)
             if self._task_workspace is not None and "workspace" not in tracker.progress:
                 await self._persist_session_progress(

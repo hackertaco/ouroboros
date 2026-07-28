@@ -822,11 +822,17 @@ class SettingsApp(App[None]):
         runtime_select = self.query_one(f"#stage-runtime-{stage.value}", Select)
         runtime_value = runtime_select.value
         if runtime_value != INHERIT_SENTINEL and not _is_blank(runtime_value):
-            return self._completion_capable_backend(str(runtime_value))
+            return self._completion_capable_backend(
+                str(runtime_value),
+                fallback_backend=self._projected_saved_llm_backend(),
+            )
 
         profile_default = get_value(self._raw, "orchestrator.runtime_profile.default")
         if profile_default:
-            return self._completion_capable_backend(str(profile_default))
+            return self._completion_capable_backend(
+                str(profile_default),
+                fallback_backend=self._projected_saved_llm_backend(),
+            )
 
         global_backend = self._projected_saved_default_runtime()
         global_capability = get_backend_capability(global_backend)
@@ -841,14 +847,41 @@ class SettingsApp(App[None]):
         if current_llm and str(current_llm).strip().lower() != "claude_code":
             return _canonical_backend(current_llm)
 
-        return self._completion_capable_backend(self._projected_saved_default_runtime())
+        return self._completion_capable_backend(
+            self._projected_saved_default_runtime(),
+            fallback_backend=self._projected_saved_llm_backend(),
+        )
 
-    def _completion_capable_backend(self, backend: str) -> str:
+    def _projected_saved_llm_backend(self) -> str:
+        """Return the completion backend that will be saved after staged changes."""
+        global_backend = self._projected_saved_default_runtime()
+        global_capability = get_backend_capability(global_backend)
+        if (
+            GLOBAL_RUNTIME_FIELD.key in self._collect_global_runtime_change_keys()
+            and global_capability is not None
+            and global_capability.supports_llm
+        ):
+            return global_backend
+
+        current_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key) or get_value(
+            self._defaults, GLOBAL_LLM_BACKEND_FIELD.key
+        )
+        return _canonical_backend(current_llm)
+
+    def _completion_capable_backend(
+        self,
+        backend: str,
+        *,
+        fallback_backend: str | None = None,
+    ) -> str:
         """Return a completion-capable backend for stage model validation."""
         runtime_backend = _canonical_backend(backend)
         capability = get_backend_capability(runtime_backend)
         if capability is not None and capability.supports_llm:
             return runtime_backend
+
+        if fallback_backend is not None:
+            return _canonical_backend(fallback_backend)
 
         current_llm = get_value(self._raw, GLOBAL_LLM_BACKEND_FIELD.key) or get_value(
             self._defaults, GLOBAL_LLM_BACKEND_FIELD.key
@@ -1016,6 +1049,13 @@ class SettingsApp(App[None]):
                     saved_completion_backend = _canonical_backend(
                         self._saved_completion_backend_from_raw(stage)
                     )
+                    if (
+                        stage.value not in self._explicit_stage_model_changes
+                        and saved_completion_backend != _canonical_backend(projected_backend)
+                        and get_value(self._raw, model_field.key) is not None
+                    ):
+                        changes[model_field.key] = None
+                        continue
                     if (
                         automatic_model is not None
                         and model_text == automatic_model
